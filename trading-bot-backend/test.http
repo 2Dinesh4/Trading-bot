@@ -1,0 +1,44 @@
+### GET Reliance Stock Price
+GET http://localhost:8000/api/price/RELIANCE
+
+### GET TCS Stock Price
+GET http://localhost:8000/api/price/TCS
+
+### GET Bitcoin Price
+GET http://localhost:8000/api/price/BTCUSDT
+
+### GET Ethereum Price
+GET http://localhost:8000/api/price/ETHUSDT
+
+### Place BUY order for Reliance
+POST http://localhost:8000/api/order/buy
+Content-Type: application/json
+
+{
+  "symbol": "RELIANCE",
+  "quantity": 1
+}
+
+### Place SELL order for Reliance
+POST http://localhost:8000/api/order/sell
+Content-Type: application/json
+
+{
+  "symbol": "RELIANCE",
+  "quantity": 1
+}
+
+### Place BUY order for Bitcoin
+POST http://localhost:8000/api/order/buy
+Content-Type: application/json
+
+{
+  "symbol": "BTCUSDT",
+  "quantity": 0.001
+}
+
+### Get Health Status
+GET http://localhost:8000/api/health
+
+### Get Supported Stocks
+GET http://localhost:8000/api/supported-stocks
