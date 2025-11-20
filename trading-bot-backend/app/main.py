@@ -11,11 +11,13 @@ import os
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
-# Import new API routers
+# Import API routers
 from app.api.auth import router as auth_router
 from app.api.kyc import router as kyc_router
 from app.api.api_keys import router as api_keys_router
 from app.api.admin import router as admin_router
+from app.api.wallet import router as wallet_router
+from app.api.trading import router as trading_router
 
 # Logging
 logging.basicConfig(level=logging.INFO)
@@ -23,17 +25,18 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="SmartTrade API",
-    description="Multi-User Trading Bot with KYC",
+    description="Multi-User Trading Bot with KYC and Wallet",
     version="3.0.0"
 )
 
-# CORS
+# CORS - UPDATED
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://localhost:3001"],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # ADD OPTIONS
     allow_headers=["*"],
+    expose_headers=["*"]  # ADD THIS
 )
 
 # Include API routers
@@ -41,6 +44,8 @@ app.include_router(auth_router)
 app.include_router(kyc_router)
 app.include_router(api_keys_router)
 app.include_router(admin_router)
+app.include_router(wallet_router)
+app.include_router(trading_router)
 
 # Request model
 class OrderRequest(BaseModel):

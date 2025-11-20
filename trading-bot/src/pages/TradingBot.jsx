@@ -92,6 +92,76 @@ export default function TradingBot() {
     const timestamp = new Date().toLocaleTimeString();
     setLogs(prev => [{timestamp, message, type}, ...prev].slice(0, 100));
   };
+
+  // --- WALLET FUNCTIONS ---
+  const startTradeWithWallet = async (symbol, amount, entryPrice) => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        addLog('❌ No auth token', 'error');
+        return { success: false, error: 'Not authenticated' };
+      }
+      addLog(`💰 Deducting $${amount.toFixed(2)} from wallet...`, 'info');
+      const response = await fetch('http://localhost:10152/api/trading/start', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          symbol: symbol,
+          amount: amount,
+          entry_price: entryPrice
+        })
+      });
+      const data = await response.json();
+      if (data.success) {
+        addLog(`✅ Deducted $${amount.toFixed(2)}`, 'success');
+        addLog(`💵 Balance: $${data.new_balance.toFixed(2)}`, 'success');
+        return { success: true, balance: data.new_balance };
+      } else {
+        addLog(`❌ Wallet error: ${data.error}`, 'error');
+        return { success: false, error: data.error };
+      }
+    } catch (error) {
+      addLog(`❌ Error: ${error.message}`, 'error');
+      return { success: false, error: error.message };
+    }
+  };
+
+  const closeTradeWithWallet = async (symbol, initialAmount, finalAmount, profitLoss) => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) return { success: false };
+      addLog(`💸 Adding $${finalAmount.toFixed(2)} to wallet...`, 'info');
+      const response = await fetch('http://localhost:10152/api/trading/close', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          symbol: symbol,
+          initial_amount: initialAmount,
+          final_amount: finalAmount,
+          profit_loss: profitLoss
+        })
+      });
+      const data = await response.json();
+      if (data.success) {
+        addLog(`✅ Added $${finalAmount.toFixed(2)}`, 'success');
+        addLog(`💵 Balance: $${data.new_balance.toFixed(2)}`, 'success');
+        addLog(`📈 P/L: ${profitLoss >= 0 ? '+' : ''}$${profitLoss.toFixed(2)}`, 
+           profitLoss >= 0 ? 'success' : 'error');
+        return { success: true };
+      }
+      return { success: false };
+    } catch (error) {
+      addLog(`❌ Error: ${error.message}`, 'error');
+      return { success: false };
+    }
+  };
+  // ---------------------------------------
   
   useEffect(() => {
     if (!params.symbol || params.symbol.trim() === '') {
@@ -111,25 +181,18 @@ export default function TradingBot() {
           apiSymbol = apiSymbol.replace('/', '');
         }
         
-        console.log('Fetching price for:', apiSymbol);
-        
+        // console.log('Fetching price for:', apiSymbol);
         const response = await fetch(`http://localhost:10152/api/price/${apiSymbol}`);
         
         if (!response.ok) {
-          console.error('API Error:', response.status, response.statusText);
           return;
         }
         
         const data = await response.json();
         
-        console.log('Price response:', data);
-        
         if (data.success) {
           const price = parseFloat(data.price);
-          console.log('Price received:', price);
           setCurrentPrice(price);
-        } else {
-          console.error('API returned error:', data.error);
         }
       } catch (error) {
         console.error('Error fetching price:', error);
@@ -175,6 +238,12 @@ export default function TradingBot() {
       addLog('Please select a trading symbol', 'error');
       return;
     }
+
+    // --- ENTRY VALIDATION (Confirmed Fixed) ---
+    if (!params.entryValue || params.entryValue <= 0) {
+      addLog('⚠️ Please enter a valid entry amount (must be greater than 0)', 'error');
+      return;
+    }
     
     if (params.initialStopLoss < 0 || params.initialStopLoss >= 100) {
       addLog('Stop loss must be between 0-100%', 'error');
@@ -212,6 +281,15 @@ export default function TradingBot() {
       const exchange = priceData.exchange === 'UPSTOX' ? 'Upstox' : 'Binance';
       addLog(`Got LIVE price from ${exchange}: ${currentCurrency}${purchasePrice.toFixed(2)}`, 'success');
       
+      // --- WALLET DEDUCTION (Confirmed Fixed) ---
+      const walletAmount = params.entryValue; 
+      const walletResult = await startTradeWithWallet(apiSymbol, walletAmount, purchasePrice);
+      if (!walletResult.success) {
+        addLog(`❌ Cannot start: ${walletResult.error}`, 'error');
+        return;
+      }
+      // ------------------------------------------
+
       const initialStopLoss = purchasePrice * (1 - params.initialStopLoss / 100);
       const targetPrice = purchasePrice * (1 + params.exitPercent / 100);
       const adjustTriggerPrice = purchasePrice * (1 + 0.02);
@@ -242,10 +320,15 @@ export default function TradingBot() {
           const newPrice = simulatePrice(prev.currentPrice);
           let newState = { ...prev, currentPrice: newPrice };
           
+          // --- STOP LOSS CHECK ---
           if (newPrice <= prev.stopLossPrice) {
             const pnl = ((newPrice - prev.position.entryPrice) / prev.position.entryPrice * 100).toFixed(2);
             addLog(`STOP LOSS HIT at ${currentCurrency}${newPrice.toFixed(2)} - P&L: ${pnl}%`, 'error');
             
+            const finalAmt = (params.entryValue || prev.position.entryPrice) * (1 + parseFloat(pnl) / 100);
+            const plAmt = finalAmt - (params.entryValue || prev.position.entryPrice);
+            closeTradeWithWallet(params.symbol, (params.entryValue || prev.position.entryPrice), finalAmt, plAmt);
+
             newState.tradeHistory = [{
               symbol: params.symbol,
               entry: prev.position.entryPrice,
@@ -263,10 +346,18 @@ export default function TradingBot() {
             };
           }
           
-          if (newPrice >= prev.targetPrice) {
+          // --- 🔥 TARGET CHECK WITH 99.95% BUFFER (FIXED) ---
+          const targetThreshold = prev.targetPrice * 0.9995; // Trigger at 99.95% of target
+          
+          if (newPrice >= targetThreshold) {
             const pnl = ((newPrice - prev.position.entryPrice) / prev.position.entryPrice * 100).toFixed(2);
-            addLog(`TARGET HIT at ${currentCurrency}${newPrice.toFixed(2)} - P&L: ${pnl}%`, 'success');
             
+            addLog(`🎯 TARGET REACHED at ${currentCurrency}${newPrice.toFixed(2)} - P&L: ${pnl}%`, 'success');
+            
+            const finalAmt = (params.entryValue || prev.position.entryPrice) * (1 + parseFloat(pnl) / 100);
+            const plAmt = finalAmt - (params.entryValue || prev.position.entryPrice);
+            closeTradeWithWallet(params.symbol, (params.entryValue || prev.position.entryPrice), finalAmt, plAmt);
+
             newState.tradeHistory = [{
               symbol: params.symbol,
               entry: prev.position.entryPrice,
@@ -284,6 +375,7 @@ export default function TradingBot() {
             };
           }
           
+          // --- SL ADJUSTMENT ---
           const priceIncrease = ((newPrice - prev.position.entryPrice) / prev.position.entryPrice) * 100;
           if (priceIncrease >= 2 && !prev.position.stopLossAdjusted) {
             const newStopLoss = prev.position.entryPrice * 1.01;
@@ -301,15 +393,21 @@ export default function TradingBot() {
     }
   };
   
-  const stopBot = () => {
+  const stopBot = async () => {
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
     }
     
     if (botState.position) {
       const pnl = ((botState.currentPrice - botState.position.entryPrice) / botState.position.entryPrice * 100).toFixed(2);
+      
+      const finalAmt = (params.entryValue || botState.position.entryPrice) * (1 + parseFloat(pnl) / 100);
+      const plAmt = finalAmt - (params.entryValue || botState.position.entryPrice);
+      
       addLog(`Bot Stopped Manually - P&L: ${pnl}%`, 'warning');
       
+      await closeTradeWithWallet(params.symbol, (params.entryValue || botState.position.entryPrice), finalAmt, plAmt);
+
       setBotState(prev => ({
         ...prev,
         tradeHistory: [{
@@ -345,13 +443,8 @@ export default function TradingBot() {
       
       const response = await fetch('http://localhost:10152/api/order/buy', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          symbol: apiSymbol,
-          quantity: quantity
-        })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol: apiSymbol, quantity: quantity })
       });
       
       const data = await response.json();
@@ -359,8 +452,6 @@ export default function TradingBot() {
       if (data.success) {
         addLog(`BUY ORDER EXECUTED!`, 'success');
         addLog(`Order ID: ${data.order_id}`, 'success');
-        addLog(`Price: ${currentCurrency}${data.price}`, 'success');
-        addLog(`Quantity: ${data.quantity}`, 'success');
       } else {
         addLog(`Buy order failed: ${data.error}`, 'error');
       }
@@ -386,13 +477,8 @@ export default function TradingBot() {
       
       const response = await fetch('http://localhost:10152/api/order/sell', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          symbol: apiSymbol,
-          quantity: quantity
-        })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol: apiSymbol, quantity: quantity })
       });
       
       const data = await response.json();
@@ -400,8 +486,6 @@ export default function TradingBot() {
       if (data.success) {
         addLog(`SELL ORDER EXECUTED!`, 'success');
         addLog(`Order ID: ${data.order_id}`, 'success');
-        addLog(`Price: ${currentCurrency}${data.price}`, 'success');
-        addLog(`Quantity: ${data.quantity}`, 'success');
       } else {
         addLog(`Sell order failed: ${data.error}`, 'error');
       }

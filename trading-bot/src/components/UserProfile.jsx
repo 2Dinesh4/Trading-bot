@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { LogOut, User, Settings, FileText, Key, Shield } from 'lucide-react';
+import { LogOut, User, Settings, FileText, Key, Shield, Wallet } from 'lucide-react';
 
 export default function UserProfile({ user, onLogout }) {
   const [showMenu, setShowMenu] = useState(false);
   const [userData, setUserData] = useState(null);
+  const [walletBalance, setWalletBalance] = useState(null);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -34,6 +35,34 @@ export default function UserProfile({ user, onLogout }) {
       }
     }
   }, [user]);
+
+  // 🔥 NEW: Fetch wallet balance
+  useEffect(() => {
+    const fetchWalletBalance = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        if (!token) return;
+
+        const response = await fetch('http://localhost:10152/api/wallet/balance', {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+
+        const data = await response.json();
+        if (data.success) {
+          setWalletBalance(data.balance);
+        }
+      } catch (error) {
+        console.error('Error fetching wallet balance:', error);
+      }
+    };
+
+    fetchWalletBalance();
+    // Refresh every 5 seconds
+    const interval = setInterval(fetchWalletBalance, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   const handleLogout = () => {
     localStorage.removeItem('user');
@@ -66,7 +95,22 @@ export default function UserProfile({ user, onLogout }) {
   }
 
   return (
-    <div className="relative">
+    <div className="relative flex items-center gap-3">
+      {/* 🔥 NEW: Wallet Balance Badge */}
+      <button
+        onClick={() => navigate('/profile')}
+        className="flex items-center gap-2 px-4 py-2 rounded-lg bg-green-500 hover:bg-green-600 transition-colors shadow-lg"
+        title="Click to view wallet"
+      >
+        <Wallet className="w-4 h-4 text-white" />
+        <div className="text-left">
+          <p className="text-[10px] text-green-100 font-medium">Wallet Balance</p>
+          <p className="text-sm font-bold text-white">
+            ${walletBalance !== null ? walletBalance.toFixed(2).toLocaleString() : '---'}
+          </p>
+        </div>
+      </button>
+
       {/* User Avatar Button */}
       <button
         onClick={() => setShowMenu(!showMenu)}
@@ -84,13 +128,13 @@ export default function UserProfile({ user, onLogout }) {
       {/* Dropdown Menu */}
       {showMenu && (
         <>
-          {/* Backdrop - UPDATED Z-INDEX */}
+          {/* Backdrop */}
           <div
             className="fixed inset-0 z-[9998]"
             onClick={() => setShowMenu(false)}
           />
           
-          {/* Menu - UPDATED Z-INDEX */}
+          {/* Menu */}
           <div className="absolute right-0 top-full mt-3 w-72 bg-white rounded-lg shadow-2xl z-[9999] overflow-hidden border border-slate-200">
             {/* User Info Header */}
             <div className="px-4 py-3 bg-gradient-to-r from-blue-600 to-purple-600">
