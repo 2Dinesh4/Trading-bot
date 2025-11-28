@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Play, Square, TrendingUp, Moon, Sun } from 'lucide-react';
 import { ThemeContext } from '../contexts/ThemeContext';
 import UserProfile from '../components/UserProfile';
+import LiveChart from '../components/LiveChart';  // ← ADDED THIS IMPORT
 
 export default function TradingBot() {
   const navigate = useNavigate();
@@ -60,6 +61,14 @@ export default function TradingBot() {
     stopLossPrice: 0,
     targetPrice: 0,
     tradeHistory: []
+  });
+  
+  // Trade History Filters
+  const [filters, setFilters] = useState({
+    dateRange: 'all', // 'today', 'week', 'month', 'all'
+    status: 'all', // 'all', 'target', 'stop_loss', 'manual_stop'
+    currencyType: 'all', // 'all', 'crypto', 'stocks'
+    pnlFilter: 'all' // 'all', 'profit', 'loss'
   });
   
   const [logs, setLogs] = useState([]);
@@ -231,6 +240,253 @@ export default function TradingBot() {
     return basePrice * (1 + change);
   };
   
+  // ========== TRADE HISTORY DATABASE FUNCTIONS ==========
+  const saveTradeToDatabase = async (tradeData) => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        console.log('No token - skipping trade save');
+        return null;
+      }
+      const response = await fetch('http://localhost:10152/api/trades', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          scrip: tradeData.symbol,
+          entry_price: tradeData.entry,
+          entry_time: tradeData.entry_time || new Date().toISOString(),
+          quantity: 1,
+          stop_loss_price: tradeData.stop_loss_price,
+          target_price: tradeData.target_price
+        })
+      });
+      const data = await response.json();
+      if (data.success) {
+        addLog(`✅ Trade #${data.trade_id} saved to database`, 'success');
+        return data.trade_id;
+      }
+    } catch (error) {
+      console.error('Error saving trade:', error);
+      addLog(`⚠️ Failed to save trade: ${error.message}`, 'warning');
+    }
+    return null;
+  };
+
+  const closeTradeInDatabase = async (tradeId, closeData) => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token || !tradeId) return;
+      const response = await fetch(`http://localhost:10152/api/trades/${tradeId}/close`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          exit_price: closeData.exit,
+          exit_time: new Date().toISOString(),
+          pnl_percent: closeData.pnl,
+          pnl_amount: closeData.pnl_amount || 0,
+          status: closeData.reason.toLowerCase().replace(' ', '_')
+        })
+      });
+      const data = await response.json();
+      if (data.success) {
+        addLog('✅ Trade closed in database', 'success');
+      }
+    } catch (error) {
+      console.error('Error closing trade:', error);
+      addLog(`⚠️ Failed to close trade in DB: ${error.message}`, 'warning');
+    }
+  };
+
+  const loadTradeHistory = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+      addLog('📥 Loading trade history...', 'info');
+
+          const response = await fetch('http://localhost:10152/api/trades?limit=50', {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      const data = await response.json();
+
+        if (data.success && data.trades) {
+      // Ensure that trade history data uses the same keys as the simulation data for rendering
+      const formattedTrades = data.trades.map(t => ({
+        symbol: t.scrip || t.symbol,
+        entry: parseFloat(t.entry_price || t.entry || 0),
+        exit: parseFloat(t.exit_price || t.exit || 0),
+        pnl: parseFloat(t.pnl_percent || t.pnl || 0),
+        reason: t.status 
+           ? t.status.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')
+          : (t.reason || 'Unknown'),
+        time: t.exit_time ? new Date(t.exit_time) : (t.entry_time ? new Date(t.entry_time) : new Date())
+      }));
+
+            setBotState(prev => ({
+        ...prev,
+        tradeHistory: formattedTrades
+      }));
+
+            addLog(`✅ Loaded ${data.trades.length} past trades from database`, 'success');
+    } else {
+      addLog('⚠️ No trades found or API error', 'warning');
+    }
+    } catch (error) {
+      console.error('Error loading trade history:', error);
+      addLog(`⚠️ Failed to load trade history: ${error.message}`, 'warning');
+    }
+  };
+  
+  // Filter trades based on current filter settings
+  const getFilteredTrades = () => {
+    let filtered = [...botState.tradeHistory];
+
+    // Filter by date range
+    if (filters.dateRange !== 'all') {
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+      filtered = filtered.filter(trade => {
+        const tradeDate = new Date(trade.time);
+
+        if (filters.dateRange === 'today') {
+          return tradeDate >= today;
+        } else if (filters.dateRange === 'week') {
+          const weekAgo = new Date(today);
+          weekAgo.setDate(weekAgo.getDate() - 7);
+          return tradeDate >= weekAgo;
+        } else if (filters.dateRange === 'month') {
+          const monthAgo = new Date(today);
+          monthAgo.setMonth(monthAgo.getMonth() - 1);
+          return tradeDate >= monthAgo;
+        }
+        return true;
+      });
+    }
+
+    // Filter by status
+    if (filters.status !== 'all') {
+      filtered = filtered.filter(trade => {
+        // Convert 'Stop Loss' or 'Manual Stop' to lower_case for matching
+        const status = trade.reason.toLowerCase().replace(' ', '_'); 
+        
+        // Handle 'stop' filter to match 'stop_loss' and 'manual_stop' for convenience
+        if (filters.status === 'stop') {
+             return status.includes('stop');
+        } 
+        
+        return status === filters.status || status.includes(filters.status);
+      });
+    }
+
+    // Filter by currency type
+    if (filters.currencyType !== 'all') {
+      filtered = filtered.filter(trade => {
+        const symbol = trade.symbol.toUpperCase();
+        const isCrypto = symbol.includes('USDT') || symbol.includes('BTC') || symbol.includes('ETH');
+        const isStock = symbol.includes('RELIANCE') || symbol.includes('TCS') ||
+                        symbol.includes('INFY') || symbol.includes('HDFC') ||
+                        symbol.includes('ICICI') || symbol.includes('SBIN') ||
+                        symbol.includes('ITC') || symbol.includes('BHARTI');
+
+        return filters.currencyType === 'crypto' ? isCrypto : isStock;
+      });
+    }
+
+    // Filter by P&L
+    if (filters.pnlFilter !== 'all') {
+      filtered = filtered.filter(trade => {
+        return filters.pnlFilter === 'profit' ? trade.pnl > 0 : trade.pnl < 0;
+      });
+    }
+
+    return filtered;
+  };
+
+  // Calculate statistics
+  const getTradeStats = () => {
+    const filtered = getFilteredTrades();
+
+    if (filtered.length === 0) {
+      return {
+        total: 0,
+        wins: 0,
+        losses: 0,
+        winRate: 0,
+        totalPnL: 0,
+        bestTrade: 0,
+        worstTrade: 0
+      };
+    }
+
+    const wins = filtered.filter(t => t.pnl > 0).length;
+    const losses = filtered.filter(t => t.pnl < 0).length;
+    const totalPnL = filtered.reduce((sum, t) => sum + t.pnl, 0);
+    const bestTrade = Math.max(...filtered.map(t => t.pnl));
+    const worstTrade = Math.min(...filtered.map(t => t.pnl));
+
+    return {
+      total: filtered.length,
+      wins,
+      losses,
+      winRate: (wins / filtered.length * 100).toFixed(1),
+      totalPnL: totalPnL.toFixed(2),
+      bestTrade: bestTrade.toFixed(2),
+      worstTrade: worstTrade.toFixed(2)
+    };
+  };
+
+  
+  const stopBot = async () => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+    }
+    
+    if (botState.position) {
+      const pnl = ((botState.currentPrice - botState.position.entryPrice) / botState.position.entryPrice * 100).toFixed(2);
+      
+      const finalAmt = (params.entryValue || botState.position.entryPrice) * (1 + parseFloat(pnl) / 100);
+      const plAmt = finalAmt - (params.entryValue || botState.position.entryPrice);
+      
+      addLog(`Bot Stopped Manually - P&L: ${pnl}%`, 'warning');
+      
+      await closeTradeWithWallet(params.symbol, (params.entryValue || botState.position.entryPrice), finalAmt, plAmt);
+
+      // Close in database
+      if (botState.position.tradeId) {
+        await closeTradeInDatabase(botState.position.tradeId, {
+          exit: botState.currentPrice,
+          pnl: parseFloat(pnl),
+          pnl_amount: plAmt,
+          reason: 'Manual Stop'
+        });
+      }
+
+      setBotState(prev => ({
+        ...prev,
+        tradeHistory: [{
+          symbol: params.symbol,
+          entry: prev.position.entryPrice,
+          exit: prev.currentPrice,
+          pnl: parseFloat(pnl),
+          reason: 'Manual Stop',
+          time: new Date()
+        }, ...prev.tradeHistory],
+        isRunning: false,
+        position: null
+      }));
+    } else {
+      setBotState(prev => ({ ...prev, isRunning: false }));
+    }
+  };
+
   const startBot = async () => {
     if (botState.isRunning) return;
     
@@ -239,7 +495,7 @@ export default function TradingBot() {
       return;
     }
 
-    // --- ENTRY VALIDATION (Confirmed Fixed) ---
+    // --- ENTRY VALIDATION ---
     if (!params.entryValue || params.entryValue <= 0) {
       addLog('⚠️ Please enter a valid entry amount (must be greater than 0)', 'error');
       return;
@@ -281,7 +537,7 @@ export default function TradingBot() {
       const exchange = priceData.exchange === 'UPSTOX' ? 'Upstox' : 'Binance';
       addLog(`Got LIVE price from ${exchange}: ${currentCurrency}${purchasePrice.toFixed(2)}`, 'success');
       
-      // --- WALLET DEDUCTION (Confirmed Fixed) ---
+      // --- WALLET DEDUCTION ---
       const walletAmount = params.entryValue; 
       const walletResult = await startTradeWithWallet(apiSymbol, walletAmount, purchasePrice);
       if (!walletResult.success) {
@@ -294,14 +550,25 @@ export default function TradingBot() {
       const targetPrice = purchasePrice * (1 + params.exitPercent / 100);
       const adjustTriggerPrice = purchasePrice * (1 + 0.02);
       
+      // Save trade to database
+      const entryTime = new Date();
+      const tradeId = await saveTradeToDatabase({
+        symbol: params.symbol,
+        entry: purchasePrice,
+        entry_time: entryTime.toISOString(),
+        stop_loss_price: initialStopLoss,
+        target_price: targetPrice
+      });
+
       setBotState(prev => ({
         ...prev,
         isRunning: true,
         position: {
           entryPrice: purchasePrice,
           quantity: 1,
-          entryTime: new Date(),
-          stopLossAdjusted: false
+          entryTime: entryTime,
+          stopLossAdjusted: false,
+          tradeId: tradeId  // ← IMPORTANT: Save trade ID
         },
         currentPrice: purchasePrice,
         stopLossPrice: initialStopLoss,
@@ -328,6 +595,16 @@ export default function TradingBot() {
             const finalAmt = (params.entryValue || prev.position.entryPrice) * (1 + parseFloat(pnl) / 100);
             const plAmt = finalAmt - (params.entryValue || prev.position.entryPrice);
             closeTradeWithWallet(params.symbol, (params.entryValue || prev.position.entryPrice), finalAmt, plAmt);
+            
+            // Close in database
+            if (prev.position.tradeId) {
+              closeTradeInDatabase(prev.position.tradeId, {
+                exit: newPrice,
+                pnl: parseFloat(pnl),
+                pnl_amount: plAmt,
+                reason: 'Stop Loss'
+              });
+            }
 
             newState.tradeHistory = [{
               symbol: params.symbol,
@@ -357,6 +634,16 @@ export default function TradingBot() {
             const finalAmt = (params.entryValue || prev.position.entryPrice) * (1 + parseFloat(pnl) / 100);
             const plAmt = finalAmt - (params.entryValue || prev.position.entryPrice);
             closeTradeWithWallet(params.symbol, (params.entryValue || prev.position.entryPrice), finalAmt, plAmt);
+
+            // Close in database
+            if (prev.position.tradeId) {
+              closeTradeInDatabase(prev.position.tradeId, {
+                exit: newPrice,
+                pnl: parseFloat(pnl),
+                pnl_amount: plAmt,
+                reason: 'Target'
+              });
+            }
 
             newState.tradeHistory = [{
               symbol: params.symbol,
@@ -393,39 +680,6 @@ export default function TradingBot() {
     }
   };
   
-  const stopBot = async () => {
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-    }
-    
-    if (botState.position) {
-      const pnl = ((botState.currentPrice - botState.position.entryPrice) / botState.position.entryPrice * 100).toFixed(2);
-      
-      const finalAmt = (params.entryValue || botState.position.entryPrice) * (1 + parseFloat(pnl) / 100);
-      const plAmt = finalAmt - (params.entryValue || botState.position.entryPrice);
-      
-      addLog(`Bot Stopped Manually - P&L: ${pnl}%`, 'warning');
-      
-      await closeTradeWithWallet(params.symbol, (params.entryValue || botState.position.entryPrice), finalAmt, plAmt);
-
-      setBotState(prev => ({
-        ...prev,
-        tradeHistory: [{
-          symbol: params.symbol,
-          entry: prev.position.entryPrice,
-          exit: prev.currentPrice,
-          pnl: parseFloat(pnl),
-          reason: 'Manual Stop',
-          time: new Date()
-        }, ...prev.tradeHistory],
-        isRunning: false,
-        position: null
-      }));
-    } else {
-      setBotState(prev => ({ ...prev, isRunning: false }));
-    }
-  };
-
   const handleBuyOrder = async () => {
     try {
       if (!botState.position) {
@@ -500,6 +754,12 @@ export default function TradingBot() {
       if (priceIntervalRef.current) clearInterval(priceIntervalRef.current);
     };
   }, []);
+  
+  // Load trade history when component mounts
+  useEffect(() => {
+    loadTradeHistory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Run only once on mount
   
   const currentPnL = botState.position 
     ? ((botState.currentPrice - botState.position.entryPrice) / botState.position.entryPrice * 100).toFixed(2)
@@ -691,7 +951,7 @@ export default function TradingBot() {
                     <input
                       type="number"
                       value={params.exitPercent}
-                      onChange={(e) => setParams({...params, exitPercent: parseFloat(e.target.value)})}
+                      onChange={e => setParams({...params, exitPercent: parseFloat(e.target.value)})}
                       disabled={botState.isRunning}
                       step="0.1"
                       className={`w-full px-3 py-2 border-2 rounded-lg focus:ring-2 focus:ring-yellow-500 disabled:opacity-50 transition-colors ${
@@ -954,78 +1214,41 @@ export default function TradingBot() {
                     </div>
                   </div>
 
-                  <div className={`rounded-lg shadow p-6 transition-colors border-l-4 ${
-                    isDark 
-                      ? 'bg-gray-700 border-blue-500' 
-                      : 'bg-slate-50 border-blue-400'
-                  }`}>
-                    <p className={`text-sm font-bold mb-4 ${
-                      isDark ? 'text-white' : 'text-slate-800'
-                    }`}>Price Distance Analysis</p>
-                    <div className="space-y-3">
-                      <div className={`rounded p-3 transition-colors ${
-                        isDark ? 'bg-gray-600' : 'bg-white'
-                      }`}>
-                        <div className="flex justify-between items-center mb-2">
-                          <span className={`text-xs font-semibold ${
-                            isDark ? 'text-gray-200' : 'text-slate-600'
-                          }`}>Distance from Entry:</span>
-                          <span className={`text-sm font-bold ${botState.currentPrice > botState.position.entryPrice ? 'text-green-600' : 'text-red-600'}`}>
-                            {botState.currentPrice > botState.position.entryPrice ? 'UP' : 'DOWN'}
-                          </span>
-                        </div>
-                        <div className="flex justify-between items-center">
-                          <span className={`text-xs ${
-                            isDark ? 'text-gray-300' : 'text-slate-500'
-                          }`}>Amount:</span>
-                          <span className={`text-sm font-bold ${botState.currentPrice > botState.position.entryPrice ? 'text-green-600' : 'text-red-600'}`}>
-                            {botState.currentPrice > botState.position.entryPrice ? '+' : ''}{(botState.currentPrice - botState.position.entryPrice).toFixed(4)} ({(((botState.currentPrice - botState.position.entryPrice) / botState.position.entryPrice) * 100).toFixed(2)}%)
-                          </span>
-                        </div>
+                  {/* LIVE PRICE CHART (Replaced Price Distance Analysis) */}
+                  <div className={`rounded-lg shadow p-6 transition-colors border-l-4 ${isDark ? 'bg-gray-700 border-blue-500' : 'bg-slate-50 border-blue-400'}`}>
+                    <p className={`text-sm font-bold mb-4 ${isDark ? 'text-white' : 'text-slate-800'}`}>
+                      Live Price Chart
+                    </p>
+
+                    <LiveChart
+                      isDark={isDark}
+                      currentPrice={botState.currentPrice}
+                      entryPrice={botState.position?.entryPrice || 0}
+                      stopLossPrice={botState.stopLossPrice}
+                      targetPrice={botState.targetPrice}
+                    />
+
+                    {/* Mini Stats Below Chart */}
+                    <div className="grid grid-cols-3 gap-3 mt-4">
+                      <div className={`rounded p-3 ${isDark ? 'bg-gray-600' : 'bg-white'}`}>
+                        <p className={`text-xs ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>Entry</p>
+                        <p className={`text-sm font-bold ${isDark ? 'text-white' : 'text-slate-800'}`}>
+                          {currentCurrency}{botState.position?.entryPrice.toFixed(4) || '0.0000'}
+                        </p>
                       </div>
 
-                      <div className={`rounded p-3 transition-colors ${
-                        isDark ? 'bg-gray-600' : 'bg-white'
-                      }`}>
-                        <div className="flex justify-between items-center mb-2">
-                          <span className={`text-xs font-semibold ${
-                            isDark ? 'text-gray-200' : 'text-slate-600'
-                          }`}>Distance to Target:</span>
-                          <span className="text-sm font-bold text-blue-600">{(botState.targetPrice - botState.currentPrice).toFixed(4)}</span>
-                        </div>
-                        <div className={`w-full rounded h-2 ${
-                          isDark ? 'bg-gray-500' : 'bg-gray-200'
-                        }`}>
-                          <div 
-                            className="bg-blue-600 h-2 rounded" 
-                            style={{width: `${Math.min(100, Math.max(0, ((botState.currentPrice - botState.position.entryPrice) / (botState.targetPrice - botState.position.entryPrice)) * 100))}%`}}
-                          ></div>
-                        </div>
-                        <p className={`text-xs mt-1 ${
-                          isDark ? 'text-gray-400' : 'text-slate-500'
-                        }`}>{Math.min(100, Math.max(0, ((botState.currentPrice - botState.position.entryPrice) / (botState.targetPrice - botState.position.entryPrice)) * 100)).toFixed(0)}% to target</p>
+                      <div className={`rounded p-3 ${isDark ? 'bg-gray-600' : 'bg-white'}`}>
+                        <p className={`text-xs ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>Stop Loss</p>
+                        <p className="text-sm font-bold text-red-600">
+                          {currentCurrency}{botState.stopLossPrice.toFixed(4)}
+                        </p>
                       </div>
 
-                      <div className={`rounded p-3 transition-colors ${
-                        isDark ? 'bg-gray-600' : 'bg-white'
-                      }`}>
-                        <div className="flex justify-between items-center mb-2">
-                          <span className={`text-xs font-semibold ${
-                            isDark ? 'text-gray-200' : 'text-slate-600'
-                          }`}>Distance to Stop Loss:</span>
-                          <span className="text-sm font-bold text-red-600">{(botState.currentPrice - botState.stopLossPrice).toFixed(4)}</span>
-                        </div>
-                        <div className={`w-full rounded h-2 ${
-                          isDark ? 'bg-gray-500' : 'bg-gray-200'
-                        }`}>
-                          <div 
-                            className="bg-red-600 h-2 rounded" 
-                            style={{width: `${Math.min(100, Math.max(0, ((botState.currentPrice - botState.stopLossPrice) / (botState.position.entryPrice - botState.stopLossPrice)) * 100))}%`}}
-                          ></div>
-                        </div>
-                        <p className={`text-xs mt-1 ${
-                          isDark ? 'text-gray-400' : 'text-slate-500'
-                        }`}>Safety margin: {Math.min(100, Math.max(0, ((botState.currentPrice - botState.stopLossPrice) / (botState.position.entryPrice - botState.stopLossPrice)) * 100)).toFixed(0)}%</p>
+                      <div className={`rounded p-3 ${isDark ? 'bg-gray-600' : 'bg-white'}`}>
+                        <p className={`text-xs ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>Target</p>
+                        <p className="text-sm font-bold text-green-600">
+                          {currentCurrency}{botState.targetPrice.toFixed(4)}
+                        </p>
                       </div>
                     </div>
                   </div>
@@ -1034,18 +1257,139 @@ export default function TradingBot() {
               
               {/* TRADE HISTORY */}
               {botState.tradeHistory.length > 0 && (
-                <div className={`rounded-lg p-4 transition-colors border-l-4 ${
-                  isDark 
-                    ? 'bg-gray-700 border-green-500' 
-                    : 'bg-slate-50 border-green-400'
-                }`}>
-                  <h2 className={`text-xl font-semibold mb-4 ${
-                    isDark ? 'text-green-400' : 'text-green-600'
-                  }`}>Trade History</h2>
+                <div className={`rounded-lg p-4 transition-colors border-l-4 ${isDark ? 'bg-gray-700 border-green-500' : 'bg-slate-50 border-green-400'}`}>
+                  <h2 className={`text-xl font-semibold mb-4 ${isDark ? 'text-green-400' : 'text-green-600'}`}>
+                    Trade History & Analytics
+                  </h2>
+
+                  {/* STATISTICS CARDS */}
+                  {(() => {
+                    const stats = getTradeStats();
+                    return (
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                        {/* Total Trades */}
+                        <div className={`rounded-lg p-3 ${isDark ? 'bg-gray-600' : 'bg-white'} shadow`}>
+                          <p className={`text-xs mb-1 ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>Total Trades</p>
+                          <p className={`text-2xl font-bold ${isDark ? 'text-white' : 'text-gray-900'}`}>{stats.total}</p>
+                        </div>
+
+                        {/* Win Rate */}
+                        <div className={`rounded-lg p-3 ${isDark ? 'bg-gray-600' : 'bg-white'} shadow`}>
+                          <p className={`text-xs mb-1 ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>Win Rate</p>
+                          <p className={`text-2xl font-bold ${stats.winRate >= 50 ? 'text-green-500' : 'text-red-500'}`}>
+                            {stats.winRate}%
+                          </p>
+                        </div>
+
+                        {/* Total P&L */}
+                        <div className={`rounded-lg p-3 ${isDark ? 'bg-gray-600' : 'bg-white'} shadow`}>
+                          <p className={`text-xs mb-1 ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>Total P&L</p>
+                          <p className={`text-2xl font-bold ${stats.totalPnL >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                            {stats.totalPnL > 0 ? '+' : ''}{stats.totalPnL}%
+                          </p>
+                        </div>
+
+                        {/* Best Trade */}
+                        <div className={`rounded-lg p-3 ${isDark ? 'bg-gray-600' : 'bg-white'} shadow`}>
+                          <p className={`text-xs mb-1 ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>Best Trade</p>
+                          <p className="text-2xl font-bold text-green-500">+{stats.bestTrade}%</p>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* FILTER CONTROLS */}
+                  <div className="space-y-3 mb-4">
+                    {/* Date Range Filter */}
+                    <div>
+                      <p className={`text-xs font-semibold mb-2 ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>Date Range:</p>
+                      <div className="flex gap-2 flex-wrap">
+                        {['all', 'today', 'week', 'month'].map(range => (
+                          <button
+                            key={range}
+                            onClick={() => setFilters({...filters, dateRange: range})}
+                            className={`px-3 py-1 rounded text-sm font-semibold transition-colors ${
+                              filters.dateRange === range
+                                ? 'bg-blue-600 text-white'
+                                : isDark ? 'bg-gray-600 text-gray-200 hover:bg-gray-500' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                            }`}
+                          >
+                            {range === 'all' ? 'All Time' : range === 'today' ? 'Today' : range === 'week' ? 'Last 7 Days' : 'Last 30 Days'}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Status Filter */}
+                    <div>
+                      <p className={`text-xs font-semibold mb-2 ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>Status:</p>
+                      <div className="flex gap-2 flex-wrap">
+                        {[
+                          { value: 'all', label: 'All' },
+                          { value: 'target', label: 'Target Hit' },
+                          { value: 'stop', label: 'Stop Loss' },
+                          { value: 'manual', label: 'Manual Stop' }
+                        ].map(item => (
+                          <button
+                            key={item.value}
+                            onClick={() => setFilters({...filters, status: item.value})}
+                            className={`px-3 py-1 rounded text-sm font-semibold transition-colors ${
+                              filters.status === item.value
+                                ? 'bg-green-600 text-white'
+                                : isDark ? 'bg-gray-600 text-gray-200 hover:bg-gray-500' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                            }`}
+                          >
+                            {item.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Currency Type & P/L Filter */}
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <p className={`text-xs font-semibold mb-2 ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>Type:</p>
+                        <div className="flex gap-2">
+                          {['all', 'crypto', 'stocks'].map(type => (
+                            <button
+                              key={type}
+                              onClick={() => setFilters({...filters, currencyType: type})}
+                              className={`px-3 py-1 rounded text-sm font-semibold transition-colors ${
+                                filters.currencyType === type
+                                  ? 'bg-yellow-600 text-white'
+                                  : isDark ? 'bg-gray-600 text-gray-200 hover:bg-gray-500' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                              }`}
+                            >
+                              {type === 'all' ? 'All' : type === 'crypto' ? 'Crypto' : 'Stocks'}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <p className={`text-xs font-semibold mb-2 ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>P&L:</p>
+                        <div className="flex gap-2">
+                          {['all', 'profit', 'loss'].map(pnl => (
+                            <button
+                              key={pnl}
+                              onClick={() => setFilters({...filters, pnlFilter: pnl})}
+                              className={`px-3 py-1 rounded text-sm font-semibold transition-colors ${
+                                filters.pnlFilter === pnl
+                                  ? pnl === 'profit' ? 'bg-green-600 text-white' : pnl === 'loss' ? 'bg-red-600 text-white' : 'bg-purple-600 text-white'
+                                  : isDark ? 'bg-gray-600 text-gray-200 hover:bg-gray-500' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                              }`}
+                            >
+                              {pnl === 'all' ? 'All' : pnl === 'profit' ? 'Profit' : 'Loss'}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* TABLE */}
                   <div className="overflow-x-auto">
-                    <table className={`w-full text-sm ${
-                      isDark ? 'text-gray-200' : 'text-slate-900'
-                    }`}>
+                    <table className={`w-full text-sm ${isDark ? 'text-gray-200' : 'text-slate-900'}`}>
                       <thead className={isDark ? 'bg-gray-600' : 'bg-slate-200'}>
                         <tr>
                           <th className="px-4 py-2 text-left">SYMBOL</th>
@@ -1056,21 +1400,26 @@ export default function TradingBot() {
                         </tr>
                       </thead>
                       <tbody>
-                        {botState.tradeHistory.map((trade, idx) => (
-                          <tr key={idx} className={`border-t ${
-                            isDark ? 'border-gray-600' : 'border-slate-200'
-                          }`}>
+                        {getFilteredTrades().map((trade, idx) => (
+                          <tr key={idx} className={`border-t ${isDark ? 'border-gray-600' : 'border-slate-200'}`}>
                             <td className="px-4 py-2">{trade.symbol}</td>
                             <td className="px-4 py-2 text-right">{detectCurrency(trade.symbol)}{trade.entry.toFixed(2)}</td>
-                            <td className="px-4 py-2 text-right">{detectCurrency(trade.symbol)}{trade.exit.toFixed(2)}</td>
-                            <td className={`px-4 py-2 text-right font-semibold ${trade.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                              {trade.pnl > 0 ? '+' : ''}{trade.pnl}%
+                            <td className="px-4 py-2 text-right">{detectCurrency(trade.symbol)}{(trade.exit || 0).toFixed(2)}</td>
+                            <td className={`px-4 py-2 text-right font-semibold ${trade.pnl > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              {trade.pnl > 0 ? '+' : ''}{(trade.pnl || 0).toFixed(2)}%
                             </td>
                             <td className="px-4 py-2">{trade.reason}</td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
+
+                    {/* No Results Message */}
+                    {getFilteredTrades().length === 0 && (
+                      <div className={`text-center py-8 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                        No trades match the selected filters
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
