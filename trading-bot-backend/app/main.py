@@ -18,6 +18,7 @@ from app.api.api_keys import router as api_keys_router
 from app.api.admin import router as admin_router
 from app.api.wallet import router as wallet_router
 from app.api.trading import router as trading_router
+from app.api.trades import router as trades_router  # ← NEW: Trade history
 
 # Logging
 logging.basicConfig(level=logging.INFO)
@@ -34,9 +35,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://localhost:3001"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # ADD OPTIONS
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
-    expose_headers=["*"]  # ADD THIS
+    expose_headers=["*"]
 )
 
 # Include API routers
@@ -46,6 +47,7 @@ app.include_router(api_keys_router)
 app.include_router(admin_router)
 app.include_router(wallet_router)
 app.include_router(trading_router)
+app.include_router(trades_router)  # ← NEW: Trade history routes
 
 # Request model
 class OrderRequest(BaseModel):
@@ -107,7 +109,8 @@ async def root():
             "Multi-user authentication",
             "KYC verification",
             "Per-user API keys",
-            "Admin panel"
+            "Admin panel",
+            "Trade history tracking"  # ← NEW
         ]
     }
 
