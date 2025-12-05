@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { LogOut, User, Settings, FileText, Key, Shield, Wallet } from 'lucide-react';
+import { LogOut, User, Settings, FileText, Key, Wallet, CheckCircle } from 'lucide-react';
 
 export default function UserProfile({ user, onLogout }) {
   const [showMenu, setShowMenu] = useState(false);
@@ -10,12 +10,17 @@ export default function UserProfile({ user, onLogout }) {
 
   useEffect(() => {
     if (user) {
+      console.log('🔍 User from props:', user);
+      console.log('🔍 is_admin from props:', user.is_admin, typeof user.is_admin);
       setUserData(user);
     } else {
       try {
         const storedUser = localStorage.getItem('user');
         if (storedUser) {
-          setUserData(JSON.parse(storedUser));
+          const parsedUser = JSON.parse(storedUser);
+          console.log('🔍 User from localStorage:', parsedUser);
+          console.log('🔍 is_admin from localStorage:', parsedUser.is_admin, typeof parsedUser.is_admin);
+          setUserData(parsedUser);
         } else {
           setUserData({
             name: 'User',
@@ -36,7 +41,7 @@ export default function UserProfile({ user, onLogout }) {
     }
   }, [user]);
 
-  // 🔥 NEW: Fetch wallet balance
+  // Fetch wallet balance
   useEffect(() => {
     const fetchWalletBalance = async () => {
       try {
@@ -59,7 +64,6 @@ export default function UserProfile({ user, onLogout }) {
     };
 
     fetchWalletBalance();
-    // Refresh every 5 seconds
     const interval = setInterval(fetchWalletBalance, 5000);
     return () => clearInterval(interval);
   }, []);
@@ -90,13 +94,20 @@ export default function UserProfile({ user, onLogout }) {
     }
   };
 
+  // ✅ SECURITY CHECK: Only show admin panel if is_admin is STRICTLY true
+  const isAdmin = () => {
+    const adminStatus = userData?.is_admin === true || userData?.is_admin === 'true';
+    console.log('🔒 Admin check:', adminStatus, 'for user:', userData?.email);
+    return adminStatus;
+  };
+
   if (!userData) {
     return <div>Loading...</div>;
   }
 
   return (
     <div className="relative flex items-center gap-3">
-      {/* 🔥 NEW: Wallet Balance Badge */}
+      {/* Wallet Balance Badge */}
       <button
         onClick={() => navigate('/profile')}
         className="flex items-center gap-2 px-4 py-2 rounded-lg bg-green-500 hover:bg-green-600 transition-colors shadow-lg"
@@ -209,21 +220,25 @@ export default function UserProfile({ user, onLogout }) {
                 </div>
               </button>
 
-              {/* Admin Panel (if admin) */}
-              {userData.is_admin && (
-                <button
-                  onClick={() => {
-                    navigate('/admin');
-                    setShowMenu(false);
-                  }}
-                  className="w-full px-4 py-3 text-left hover:bg-purple-50 transition-colors flex items-center gap-3 text-purple-700 font-medium"
-                >
-                  <Shield className="w-5 h-5" />
-                  <div>
-                    <div className="font-semibold">Admin Panel</div>
-                    <div className="text-xs text-purple-500">Manage users & KYC</div>
-                  </div>
-                </button>
+              {/* ✅ ADMIN PANEL - STRICT SECURITY CHECK */}
+              {isAdmin() && (
+                <>
+                  <div className="border-t border-slate-200 my-2"></div>
+                  
+                  <button
+                    onClick={() => {
+                      navigate('/admin/kyc');
+                      setShowMenu(false);
+                    }}
+                    className="w-full px-4 py-3 text-left hover:bg-orange-50 transition-colors flex items-center gap-3 text-orange-700 font-medium"
+                  >
+                    <CheckCircle className="w-5 h-5" />
+                    <div>
+                      <div className="font-semibold">Admin KYC</div>
+                      <div className="text-xs text-orange-500">Verify user documents</div>
+                    </div>
+                  </button>
+                </>
               )}
               
               <div className="border-t border-slate-200 my-2"></div>

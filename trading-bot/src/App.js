@@ -8,7 +8,7 @@ import Signup from './components/Signup';
 import Profile from './pages/Profile';
 import KYCUpload from './pages/KYCUpload';
 import APIKeysManagement from './pages/APIKeysManagement';
-import AdminDashboard from './pages/AdminDashboard';
+import AdminKYC from './pages/AdminKYC';
 import TradingBot from './pages/TradingBot';
 import ProtectedRoute from './components/ProtectedRoute';
 
@@ -61,11 +61,12 @@ function App() {
                 }
               />
               
+              {/* ✅ ADMIN KYC ROUTE */}
               <Route
-                path="/admin"
+                path="/admin/kyc"
                 element={
                   <ProtectedRoute adminOnly={true}>
-                    <AdminDashboard />
+                    <AdminKYC />
                   </ProtectedRoute>
                 }
               />

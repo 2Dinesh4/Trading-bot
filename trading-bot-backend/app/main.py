@@ -3,6 +3,7 @@ load_dotenv()
 
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles  # ✅ NEW IMPORT
 from app.services.exchange_service import exchange_service
 from app.database import engine, Base, SessionLocal
 from pydantic import BaseModel
@@ -10,6 +11,7 @@ import logging
 import os
 from sqlalchemy.orm import Session
 from sqlalchemy import text
+from pathlib import Path  # ✅ NEW IMPORT
 
 # Import API routers
 from app.api.auth import router as auth_router
@@ -18,7 +20,7 @@ from app.api.api_keys import router as api_keys_router
 from app.api.admin import router as admin_router
 from app.api.wallet import router as wallet_router
 from app.api.trading import router as trading_router
-from app.api.trades import router as trades_router  # ← NEW: Trade history
+from app.api.trades import router as trades_router
 
 # Logging
 logging.basicConfig(level=logging.INFO)
@@ -40,6 +42,13 @@ app.add_middleware(
     expose_headers=["*"]
 )
 
+# ✅ NEW: Mount static files for KYC documents
+UPLOAD_DIR = Path("app/uploads")
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+app.mount("/uploads", StaticFiles(directory="app/uploads"), name="uploads")
+logger.info("✅ Static file serving enabled: /uploads")
+
 # Include API routers
 app.include_router(auth_router)
 app.include_router(kyc_router)
@@ -47,7 +56,7 @@ app.include_router(api_keys_router)
 app.include_router(admin_router)
 app.include_router(wallet_router)
 app.include_router(trading_router)
-app.include_router(trades_router)  # ← NEW: Trade history routes
+app.include_router(trades_router)
 
 # Request model
 class OrderRequest(BaseModel):
@@ -94,6 +103,9 @@ async def startup_event():
     else:
         print("⚠️ Database (Not configured)")
     
+    # ✅ NEW: Show upload directory
+    print(f"✅ KYC Uploads: {UPLOAD_DIR.absolute()}")
+    
     print("="*60 + "\n")
 
 @app.on_event("shutdown")
@@ -110,7 +122,8 @@ async def root():
             "KYC verification",
             "Per-user API keys",
             "Admin panel",
-            "Trade history tracking"  # ← NEW
+            "Trade history tracking",
+            "Document upload & viewing"  # ✅ NEW
         ]
     }
 
