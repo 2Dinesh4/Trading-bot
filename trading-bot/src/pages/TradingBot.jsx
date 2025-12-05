@@ -34,7 +34,8 @@ export default function TradingBot() {
     symbol: '',
     entryValue: 0,
     initialStopLoss: 5,
-    exitPercent: 3
+    exitPercent: 3,
+    trailingDistance: 2  // ✅ NEW: Trailing distance
   });
   
   const [popularSymbols] = useState([
@@ -510,6 +511,12 @@ export default function TradingBot() {
       addLog('Exit percentage must be greater than 0', 'error');
       return;
     }
+
+    // ✅ NEW: Trailing validation
+    if (params.trailingDistance <= 0 || params.trailingDistance >= 100) {
+      addLog('Trailing distance must be between 0-100%', 'error');
+      return;
+    }
     
     try {
       let apiSymbol = params.symbol.trim();
@@ -548,7 +555,7 @@ export default function TradingBot() {
 
       const initialStopLoss = purchasePrice * (1 - params.initialStopLoss / 100);
       const targetPrice = purchasePrice * (1 + params.exitPercent / 100);
-      const adjustTriggerPrice = purchasePrice * (1 + 0.02);
+      // const adjustTriggerPrice = purchasePrice * (1 + 0.02); // ❌ DELETED THIS LINE
       
       // Save trade to database
       const entryTime = new Date();
@@ -560,6 +567,7 @@ export default function TradingBot() {
         target_price: targetPrice
       });
 
+      // ✅ UPDATED: Add highestPrice and trailingActive
       setBotState(prev => ({
         ...prev,
         isRunning: true,
@@ -567,18 +575,21 @@ export default function TradingBot() {
           entryPrice: purchasePrice,
           quantity: 1,
           entryTime: entryTime,
-          stopLossAdjusted: false,
-          tradeId: tradeId  // ← IMPORTANT: Save trade ID
+          highestPrice: purchasePrice,    // ✅ NEW: Track highest price
+          trailingActive: false,           // ✅ NEW: Trailing activation flag
+          tradeId: tradeId
         },
         currentPrice: purchasePrice,
         stopLossPrice: initialStopLoss,
         targetPrice: targetPrice
       }));
       
-      addLog(`Bot Started for ${params.symbol} - Entry: ${currentCurrency}${purchasePrice.toFixed(2)}`, 'success');
-      addLog(`Initial Stop Loss: ${currentCurrency}${initialStopLoss.toFixed(2)} (${params.initialStopLoss}%)`, 'info');
-      addLog(`SL Adjust Trigger: ${currentCurrency}${adjustTriggerPrice.toFixed(2)} (+2%)`, 'info');
-      addLog(`Target Price: ${currentCurrency}${targetPrice.toFixed(2)} (+${params.exitPercent}%)`, 'info');
+      // ✅ UPDATED: Startup logs
+      addLog(`🚀 Bot Started for ${params.symbol} - Entry: ${currentCurrency}${purchasePrice.toFixed(2)}`, 'success');
+      addLog(`📉 Initial Stop Loss: ${currentCurrency}${initialStopLoss.toFixed(2)} (-${params.initialStopLoss}%)`, 'info');
+      addLog(`🔄 Trailing Activates at: ${currentCurrency}${(purchasePrice * 1.02).toFixed(2)} (+2%)`, 'info');
+      addLog(`📊 Trailing Distance: ${params.trailingDistance}%`, 'info');
+      addLog(`🎯 Target Price: ${currentCurrency}${targetPrice.toFixed(2)} (+${params.exitPercent}%)`, 'info');
       
       intervalRef.current = setInterval(() => {
         setBotState(prev => {
@@ -662,13 +673,29 @@ export default function TradingBot() {
             };
           }
           
-          // --- SL ADJUSTMENT ---
+          // ✅ NEW: TRAILING STOP LOSS LOGIC (REPLACED OLD SL ADJUSTMENT)
+          // Track highest price
+          const highestPrice = Math.max(prev.position.highestPrice, newPrice);
+          newState.position = { ...prev.position, highestPrice: highestPrice };
+
           const priceIncrease = ((newPrice - prev.position.entryPrice) / prev.position.entryPrice) * 100;
-          if (priceIncrease >= 2 && !prev.position.stopLossAdjusted) {
-            const newStopLoss = prev.position.entryPrice * 1.01;
-            addLog(`Price up ${priceIncrease.toFixed(2)}%! Stop Loss adjusted to ${currentCurrency}${newStopLoss.toFixed(2)} (+1% from entry)`, 'warning');
-            newState.stopLossPrice = newStopLoss;
-            newState.position = { ...newState.position, stopLossAdjusted: true };
+
+          // Activate trailing when price hits +2%
+          if (priceIncrease >= 2) {
+            if (!prev.position.trailingActive) {
+              addLog(`🔄 Trailing Stop Loss ACTIVATED at +${priceIncrease.toFixed(2)}%`, 'warning');
+              newState.position.trailingActive = true;
+            }
+
+            // Calculate trailing stop loss
+            const trailingSL = highestPrice * (1 - params.trailingDistance / 100);
+
+            // Only move SL UP, never down
+            if (trailingSL > prev.stopLossPrice) {
+              const slChange = ((trailingSL - prev.stopLossPrice) / prev.stopLossPrice * 100).toFixed(2);
+              addLog(`📈 Trailing SL moved to ${currentCurrency}${trailingSL.toFixed(2)} (+${slChange}% from previous SL)`, 'info');
+              newState.stopLossPrice = trailingSL;
+            }
           }
           
           return newState;
@@ -961,6 +988,32 @@ export default function TradingBot() {
                       }`}
                     />
                   </div>
+                  
+                  {/* ✅ NEW: TRAILING DISTANCE INPUT */}
+                  <div>
+                    <label className={`block text-sm font-medium mb-1 ${
+                      isDark ? 'text-gray-200' : 'text-slate-700'
+                    }`}>
+                      Trailing Distance (%)
+                    </label>
+                    <input
+                      type="number"
+                      value={params.trailingDistance}
+                      onChange={(e) => setParams({...params, trailingDistance: parseFloat(e.target.value)})}
+                      disabled={botState.isRunning}
+                      step="0.1"
+                      min="0.1"
+                      max="10"
+                      className={`w-full px-3 py-2 border-2 rounded-lg focus:ring-2 focus:ring-yellow-500 disabled:opacity-50 transition-colors ${
+                        isDark 
+                          ? 'bg-gray-600 border-gray-500 text-white' 
+                          : 'border-yellow-300 bg-white text-slate-900'
+                      }`}
+                    />
+                    <p className={`text-xs mt-1 ${isDark ? 'text-gray-400' : 'text-gray-600'}`}>
+                      SL follows price at {params.trailingDistance}% distance
+                    </p>
+                  </div>
                 </div>
                 
                 <button
@@ -1016,13 +1069,12 @@ export default function TradingBot() {
                 }`}>
                   Strategy Rules
                 </h3>
-                <ul className={`text-sm space-y-1 ${
-                  isDark ? 'text-gray-300' : 'text-yellow-800'
-                }`}>
-                  <li>Entry at LIVE price (Binance or Upstox)</li>
-                  <li>Initial SL: Entry - {params.initialStopLoss}%</li>
-                  <li>If price ≥ Entry+2%: SL moves Entry+1%</li>
-                  <li>If price ≥ Entry+{params.exitPercent}%: Exit</li>
+                <ul className={`text-sm space-y-1 ${isDark ? 'text-gray-300' : 'text-yellow-800'}`}>
+                  <li>✅ Entry at LIVE price (Binance or Upstox)</li>
+                  <li>📉 Initial SL: Entry - {params.initialStopLoss}%</li>
+                  <li>🔄 Trailing activates at +2% profit</li>
+                  <li>📊 SL trails price at {params.trailingDistance}% distance</li>
+                  <li>🎯 Exit if price ≥ Entry+{params.exitPercent}%</li>
                 </ul>
               </div>
             </div>
@@ -1202,13 +1254,13 @@ export default function TradingBot() {
                         <p className={`text-sm font-semibold mb-3 ${
                           isDark ? 'text-gray-300' : 'text-slate-600'
                         }`}>Stop Loss Status</p>
-                        <div className={`text-lg font-bold ${botState.position.stopLossAdjusted ? 'text-green-600' : 'text-orange-600'}`}>
-                          {botState.position.stopLossAdjusted ? 'Adjusted' : 'Waiting'}
+                        <div className={`text-lg font-bold ${botState.position.trailingActive ? 'text-green-600' : 'text-orange-600'}`}>
+                          {botState.position.trailingActive ? 'Trailing Active' : 'Waiting'}
                         </div>
                         <p className={`text-xs mt-2 ${
                           isDark ? 'text-gray-400' : 'text-slate-500'
                         }`}>
-                          {botState.position.stopLossAdjusted ? 'SL moved to +1%' : 'Need +2% increase'}
+                          {botState.position.trailingActive ? `Trailing @ ${params.trailingDistance}%` : 'Need +2% increase'}
                         </p>
                       </div>
                     </div>

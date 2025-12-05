@@ -10,11 +10,10 @@ export const kycService = {
       formData.append('document_number', documentNumber);
       formData.append('file', file);
 
-      const response = await api.post('/api/kyc/upload', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data'
-        }
-      });
+      // ✅ FIX: Don't override headers - let interceptor add Authorization
+      const response = await api.post('/api/kyc/upload', formData);
+      // ❌ REMOVED: headers: { 'Content-Type': 'multipart/form-data' }
+      // Axios automatically sets correct Content-Type for FormData
 
       return response.data;
     } catch (error) {
