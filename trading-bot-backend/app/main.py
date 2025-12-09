@@ -3,15 +3,19 @@ load_dotenv()
 
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles  # ✅ NEW IMPORT
+from fastapi.staticfiles import StaticFiles
 from app.services.exchange_service import exchange_service
 from app.database import engine, Base, SessionLocal
 from pydantic import BaseModel
 import logging
 import os
+import asyncio  # ✅ Added for background tasks
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from pathlib import Path  # ✅ NEW IMPORT
+from pathlib import Path
+
+# ✅ Import the Trading Engine
+from app.services.trading_engine import trading_engine
 
 # Import API routers
 from app.api.auth import router as auth_router
@@ -42,7 +46,7 @@ app.add_middleware(
     expose_headers=["*"]
 )
 
-# ✅ NEW: Mount static files for KYC documents
+# ✅ Mount static files for KYC documents
 UPLOAD_DIR = Path("app/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -103,14 +107,20 @@ async def startup_event():
     else:
         print("⚠️ Database (Not configured)")
     
-    # ✅ NEW: Show upload directory
+    # ✅ Show upload directory
     print(f"✅ KYC Uploads: {UPLOAD_DIR.absolute()}")
+    
+    # ✅ START THE TRADING ENGINE HERE
+    asyncio.create_task(trading_engine.run_loop())
+    print("✅ Background Trading Engine Started (Monitoring Prices...)")
     
     print("="*60 + "\n")
 
 @app.on_event("shutdown")
 async def shutdown_event():
     print("\n🛑 Shutting down SmartTrade API...")
+    # Stop the engine gracefully
+    trading_engine.running = False
 
 @app.get("/")
 async def root():
@@ -123,7 +133,8 @@ async def root():
             "Per-user API keys",
             "Admin panel",
             "Trade history tracking",
-            "Document upload & viewing"  # ✅ NEW
+            "Document upload & viewing",
+            "Automated Trading Engine" # ✅ Added to list
         ]
     }
 
@@ -133,7 +144,8 @@ async def get_price(symbol: str):
     if not symbol or not isinstance(symbol, str):
         return {"success": False, "error": "Invalid symbol provided"}
 
-    logger.info(f"📊 Price: {symbol}")
+    # logger.info(f"📊 Price: {symbol}") 
+    # Commented out logging to reduce console noise during high-frequency polling
     result = exchange_service.get_price(symbol)
     return result
 
@@ -180,7 +192,8 @@ async def health_check(db: Session = Depends(get_db)):
         "status": "healthy",
         "binance": binance_status,
         "upstox": upstox_status,
-        "database": db_status
+        "database": db_status,
+        "engine": "running" if trading_engine.running else "stopped" # ✅ Added engine status
     }
 
 @app.get("/api/supported-stocks")
