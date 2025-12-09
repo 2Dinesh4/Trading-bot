@@ -3,6 +3,8 @@ from app.models.user import User
 from app.models.wallet import WalletTransaction
 from decimal import Decimal
 import logging
+# ✅ Import the Email Service
+from app.services.email_service import email_service 
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +45,9 @@ class TradingService:
             
             logger.info(f"✅ Trade started: User {user_id} invested ${amount} in {symbol}")
             
+            # ✅ OPTIONAL: Send Email on Start (Uncomment if you want alerts for opening trades too)
+            # email_service.send_trade_alert(symbol, "BUY (Trade Started)", entry_price, 0, "Bot Started")
+
             return {
                 "success": True,
                 "message": f"Deducted ${amount} from wallet",
@@ -85,6 +90,20 @@ class TradingService:
             
             logger.info(f"✅ Trade closed: User {user_id} received ${final_amount} from {symbol} (P/L: ${profit})")
             
+            # ✅ CALCULATE P&L % AND SEND EMAIL
+            try:
+                pnl_percent = (float(profit) / float(initial_amount)) * 100
+                email_service.send_trade_alert(
+                    symbol=symbol,
+                    action="SELL (Trade Closed)",
+                    price=0,  # Price is 0 because frontend handles simulation
+                    pnl=pnl_percent,
+                    reason=f"Profit/Loss: ${float(profit):.2f}"
+                )
+                logger.info("📧 Close Trade Email Triggered")
+            except Exception as mail_err:
+                logger.error(f"⚠️ Failed to send email: {mail_err}")
+
             return {
                 "success": True,
                 "message": f"Added ${final_amount} to wallet",
