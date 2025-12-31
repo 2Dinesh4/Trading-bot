@@ -14,8 +14,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from pathlib import Path
 
-# ✅ Import the Trading Engine
+# ✅ Import Models & Services for Auto-Sync
+from app.models.user import User
 from app.services.trading_engine import trading_engine
+from app.services.trading_service import trading_service  # ✅ Import Trading Service
 
 # Import API routers
 from app.api.auth import router as auth_router
@@ -36,7 +38,7 @@ app = FastAPI(
     version="3.0.0"
 )
 
-# CORS - UPDATED
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://localhost:3001"],
@@ -75,6 +77,39 @@ def get_db():
     finally:
         db.close()
 
+# -------------------------------------------------------------------
+# 🔄 AUTO-SYNC WALLET FUNCTION
+# -------------------------------------------------------------------
+async def sync_wallet_on_startup():
+    """
+    Connects to Binance, fetches REAL USDT balance, 
+    and updates the Local Database to match it exactly.
+    """
+    print("\n🔄 SYNC: Checking Real Binance Balance...")
+    try:
+        real_balance = trading_service.get_binance_balance()
+        
+        if real_balance is not None:
+            db = SessionLocal()
+            try:
+                # Assuming Admin/Main User is ID 1
+                user = db.query(User).filter(User.id == 1).first()
+                if user:
+                    old_balance = float(user.wallet_balance)
+                    user.wallet_balance = real_balance
+                    db.commit()
+                    print(f"💰 WALLET SYNCED: DB was ${old_balance:.2f} -> Now ${real_balance:.2f} (Real)")
+                else:
+                    print("⚠️ User ID 1 not found. Skipping wallet sync.")
+            finally:
+                db.close()
+        else:
+            print("⚠️ Could not fetch Binance balance (Keys missing or Network issue). Skipping sync.")
+            
+    except Exception as e:
+        print(f"❌ Wallet Sync Failed: {e}")
+# -------------------------------------------------------------------
+
 @app.on_event("startup")
 async def startup_event():
     # Initialize database tables
@@ -92,10 +127,10 @@ async def startup_event():
     print("🚀 SmartTrade API v3.0 - Multi-User with KYC")
     print("="*60)
     
-    if binance_key:
-        print("✅ Binance (Crypto)")
+    if binance_key and "PLACEHOLDER" not in binance_key:
+        print("✅ Binance (Crypto) - Keys Configured")
     else:
-        print("❌ Binance (Crypto)")
+        print("⚠️ Binance (Crypto) - Waiting for Keys")
     
     if upstox_key:
         print("✅ Upstox (Indian Stocks)")
@@ -104,13 +139,14 @@ async def startup_event():
     
     if database_url:
         print("✅ Database (PostgreSQL)")
-    else:
-        print("⚠️ Database (Not configured)")
     
     # ✅ Show upload directory
     print(f"✅ KYC Uploads: {UPLOAD_DIR.absolute()}")
     
-    # ✅ START THE TRADING ENGINE HERE
+    # ✅ RUN AUTO-SYNC
+    await sync_wallet_on_startup()
+    
+    # ✅ START THE TRADING ENGINE
     asyncio.create_task(trading_engine.run_loop())
     print("✅ Background Trading Engine Started (Monitoring Prices...)")
     
@@ -134,7 +170,7 @@ async def root():
             "Admin panel",
             "Trade history tracking",
             "Document upload & viewing",
-            "Automated Trading Engine" # ✅ Added to list
+            "Automated Trading Engine"
         ]
     }
 
@@ -144,8 +180,6 @@ async def get_price(symbol: str):
     if not symbol or not isinstance(symbol, str):
         return {"success": False, "error": "Invalid symbol provided"}
 
-    # logger.info(f"📊 Price: {symbol}") 
-    # Commented out logging to reduce console noise during high-frequency polling
     result = exchange_service.get_price(symbol)
     return result
 
@@ -193,14 +227,19 @@ async def health_check(db: Session = Depends(get_db)):
         "binance": binance_status,
         "upstox": upstox_status,
         "database": db_status,
-        "engine": "running" if trading_engine.running else "stopped" # ✅ Added engine status
+        "engine": "running" if trading_engine.running else "stopped"
     }
 
 @app.get("/api/supported-stocks")
 async def get_stocks():
     """List supported Indian stocks"""
+    # Safety check for accessing the stock map
+    stocks = getattr(exchange_service, "supported_stocks", [])
+    if hasattr(exchange_service, "indian_stock_map"):
+         stocks = list(exchange_service.indian_stock_map.keys())
+         
     return {
         "success": True,
-        "stocks": list(exchange_service.indian_stock_map.keys()),
-        "count": len(exchange_service.indian_stock_map)
+        "stocks": stocks,
+        "count": len(stocks)
     }
