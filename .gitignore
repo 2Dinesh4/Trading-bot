@@ -9,3 +9,9 @@ venv/
 *.txt
 *.py
 uploads/
+
+
+__pycache__/
+*.pyc
+.env
+trading-bot-backend/app/uploads/
