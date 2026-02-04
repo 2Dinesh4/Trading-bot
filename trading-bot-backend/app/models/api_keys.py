@@ -3,24 +3,23 @@ from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.database import Base
 
-
 class UserAPIKey(Base):
-    """User-specific API keys for exchanges"""
+    """User-specific API keys for exchanges (Encrypted)"""
     __tablename__ = "user_api_keys"
     
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     
     # Exchange details
-    exchange = Column(String, nullable=False)  # binance, upstox
+    exchange = Column(String, default="binance", nullable=False)
     
-    # Encrypted keys
+    # Encrypted keys (Store these securely!)
     api_key_encrypted = Column(String, nullable=False)
     api_secret_encrypted = Column(String, nullable=True)
-    access_token_encrypted = Column(String, nullable=True)
+    access_token_encrypted = Column(String, nullable=True) # For brokers like Upstox
     
     # Metadata
-    key_name = Column(String, nullable=True)  # User-friendly name
+    key_name = Column(String, nullable=True)
     is_active = Column(Boolean, default=True)
     
     # Timestamps
