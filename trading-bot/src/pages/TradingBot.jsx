@@ -1,15 +1,22 @@
-import React, { useState, useEffect, useRef, useContext } from 'react';
+import React, { useState, useEffect, useRef, useContext, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Play, Square, TrendingUp, Moon, Sun } from 'lucide-react';
+import { Play, Square, TrendingUp, Moon, Sun, Link, Unlink } from 'lucide-react';
 import { ThemeContext } from '../contexts/ThemeContext';
 import UserProfile from '../components/UserProfile';
-import LiveChart from '../components/LiveChart';  // ← ADDED THIS IMPORT
+import LiveChart from '../components/LiveChart';
+import ConnectExchange from '../components/ConnectExchange';
 
 export default function TradingBot() {
   const navigate = useNavigate();
   const { isDark, toggleTheme } = useContext(ThemeContext);
   const [userData, setUserData] = useState(null);
+  
+  // STATE FOR LINKING / UNLINKING
+  const [isLinked, setIsLinked] = useState(false);
+  const [showConnectModal, setShowConnectModal] = useState(false);
+  const [unlinking, setUnlinking] = useState(false);
 
+  // 1. Load User Data
   useEffect(() => {
     const storedUser = localStorage.getItem('user');
     if (storedUser) {
@@ -24,6 +31,65 @@ export default function TradingBot() {
     }
   }, [navigate]);
 
+  // 2. Check Link Status
+  const checkLinkStatus = useCallback(async () => {
+    if (!userData?.id) return;
+
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`http://localhost:10152/api/keys/balance/${userData.id}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      const data = await response.json();
+
+      if (data.linked) {
+        setIsLinked(true);
+      } else {
+        setIsLinked(false);
+      }
+    } catch (error) {
+      console.error("Failed to check link status:", error);
+    }
+  }, [userData]); 
+
+  useEffect(() => {
+    if (userData) {
+      checkLinkStatus();
+    }
+  }, [userData, checkLinkStatus]);
+
+  // 3. HANDLE UNLINK
+  const handleUnlink = async () => {
+    if (!window.confirm("Are you sure you want to disconnect Binance? This will stop all active trading for this account.")) {
+      return;
+    }
+
+    setUnlinking(true);
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch('http://localhost:10152/api/keys/binance', {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (response.ok || response.status === 204) {
+        setIsLinked(false);
+        alert("✅ Binance Unlinked Successfully");
+      } else {
+        alert("❌ Failed to unlink. Please try again.");
+      }
+    } catch (error) {
+      console.error("Unlink error:", error);
+      alert("Error disconnecting exchange.");
+    } finally {
+      setUnlinking(false);
+    }
+  };
+
   const handleLogout = () => {
     localStorage.removeItem('user');
     localStorage.removeItem('token');
@@ -35,7 +101,8 @@ export default function TradingBot() {
     entryValue: 0,
     initialStopLoss: 5,
     exitPercent: 3,
-    trailingDistance: 2  // ✅ NEW: Trailing distance
+    trailingDistance: 2,
+    maxDailyLoss: 50 // ✅ BUG-006: Added Max Daily Loss Limit
   });
   
   const [popularSymbols] = useState([
@@ -66,10 +133,10 @@ export default function TradingBot() {
   
   // Trade History Filters
   const [filters, setFilters] = useState({
-    dateRange: 'all', // 'today', 'week', 'month', 'all'
-    status: 'all', // 'all', 'target', 'stop_loss', 'manual_stop'
-    currencyType: 'all', // 'all', 'crypto', 'stocks'
-    pnlFilter: 'all' // 'all', 'profit', 'loss'
+    dateRange: 'all', 
+    status: 'all', 
+    currencyType: 'all', 
+    pnlFilter: 'all' 
   });
   
   const [logs, setLogs] = useState([]);
@@ -89,10 +156,6 @@ export default function TradingBot() {
       return '₹';
     }
     if (symbolUpper.includes('INR')) return '₹';
-    if (symbolUpper.includes('EUR')) return '€';
-    if (symbolUpper.includes('GBP')) return '£';
-    if (symbolUpper.includes('JPY')) return '¥';
-    
     return '$';
   };
   
@@ -162,7 +225,7 @@ export default function TradingBot() {
         addLog(`✅ Added $${finalAmount.toFixed(2)}`, 'success');
         addLog(`💵 Balance: $${data.new_balance.toFixed(2)}`, 'success');
         addLog(`📈 P/L: ${profitLoss >= 0 ? '+' : ''}$${profitLoss.toFixed(2)}`, 
-           profitLoss >= 0 ? 'success' : 'error');
+            profitLoss >= 0 ? 'success' : 'error');
         return { success: true };
       }
       return { success: false };
@@ -191,7 +254,6 @@ export default function TradingBot() {
           apiSymbol = apiSymbol.replace('/', '');
         }
         
-        // console.log('Fetching price for:', apiSymbol);
         const response = await fetch(`http://localhost:10152/api/price/${apiSymbol}`);
         
         if (!response.ok) {
@@ -310,32 +372,31 @@ export default function TradingBot() {
       if (!token) return;
       addLog('📥 Loading trade history...', 'info');
 
-          const response = await fetch('http://localhost:10152/api/trades?limit=50', {
+      const response = await fetch('http://localhost:10152/api/trades?limit=50', {
         headers: {
           'Authorization': `Bearer ${token}`
         }
       });
       const data = await response.json();
 
-        if (data.success && data.trades) {
-      // Ensure that trade history data uses the same keys as the simulation data for rendering
+      if (data.success && data.trades) {
       const formattedTrades = data.trades.map(t => ({
         symbol: t.scrip || t.symbol,
         entry: parseFloat(t.entry_price || t.entry || 0),
         exit: parseFloat(t.exit_price || t.exit || 0),
         pnl: parseFloat(t.pnl_percent || t.pnl || 0),
         reason: t.status 
-           ? t.status.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')
-          : (t.reason || 'Unknown'),
+            ? t.status.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')
+            : (t.reason || 'Unknown'),
         time: t.exit_time ? new Date(t.exit_time) : (t.entry_time ? new Date(t.entry_time) : new Date())
       }));
 
-            setBotState(prev => ({
+        setBotState(prev => ({
         ...prev,
         tradeHistory: formattedTrades
       }));
 
-            addLog(`✅ Loaded ${data.trades.length} past trades from database`, 'success');
+        addLog(`✅ Loaded ${data.trades.length} past trades from database`, 'success');
     } else {
       addLog('⚠️ No trades found or API error', 'warning');
     }
@@ -349,7 +410,6 @@ export default function TradingBot() {
   const getFilteredTrades = () => {
     let filtered = [...botState.tradeHistory];
 
-    // Filter by date range
     if (filters.dateRange !== 'all') {
       const now = new Date();
       const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -372,13 +432,10 @@ export default function TradingBot() {
       });
     }
 
-    // Filter by status
     if (filters.status !== 'all') {
       filtered = filtered.filter(trade => {
-        // Convert 'Stop Loss' or 'Manual Stop' to lower_case for matching
         const status = trade.reason.toLowerCase().replace(' ', '_'); 
         
-        // Handle 'stop' filter to match 'stop_loss' and 'manual_stop' for convenience
         if (filters.status === 'stop') {
              return status.includes('stop');
         } 
@@ -387,21 +444,15 @@ export default function TradingBot() {
       });
     }
 
-    // Filter by currency type
     if (filters.currencyType !== 'all') {
       filtered = filtered.filter(trade => {
         const symbol = trade.symbol.toUpperCase();
         const isCrypto = symbol.includes('USDT') || symbol.includes('BTC') || symbol.includes('ETH');
-        const isStock = symbol.includes('RELIANCE') || symbol.includes('TCS') ||
-                        symbol.includes('INFY') || symbol.includes('HDFC') ||
-                        symbol.includes('ICICI') || symbol.includes('SBIN') ||
-                        symbol.includes('ITC') || symbol.includes('BHARTI');
-
-        return filters.currencyType === 'crypto' ? isCrypto : isStock;
+        
+        return filters.currencyType === 'crypto' ? isCrypto : !isCrypto;
       });
     }
 
-    // Filter by P&L
     if (filters.pnlFilter !== 'all') {
       filtered = filtered.filter(trade => {
         return filters.pnlFilter === 'profit' ? trade.pnl > 0 : trade.pnl < 0;
@@ -411,7 +462,6 @@ export default function TradingBot() {
     return filtered;
   };
 
-  // Calculate statistics
   const getTradeStats = () => {
     const filtered = getFilteredTrades();
 
@@ -444,47 +494,53 @@ export default function TradingBot() {
     };
   };
 
-  
+  // ✅ BUG-001 FIX: EMERGENCY STOP LOGIC (UPDATED)
   const stopBot = async () => {
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
     }
     
-    if (botState.position) {
-      const pnl = ((botState.currentPrice - botState.position.entryPrice) / botState.position.entryPrice * 100).toFixed(2);
-      
-      const finalAmt = (params.entryValue || botState.position.entryPrice) * (1 + parseFloat(pnl) / 100);
-      const plAmt = finalAmt - (params.entryValue || botState.position.entryPrice);
-      
-      addLog(`Bot Stopped Manually - P&L: ${pnl}%`, 'warning');
-      
-      await closeTradeWithWallet(params.symbol, (params.entryValue || botState.position.entryPrice), finalAmt, plAmt);
+    // Immediate UI Feedback
+    addLog('🚨 INITIATING EMERGENCY STOP...', 'warning');
+    setBotState(prev => ({ ...prev, isRunning: false }));
 
-      // Close in database
-      if (botState.position.tradeId) {
-        await closeTradeInDatabase(botState.position.tradeId, {
-          exit: botState.currentPrice,
-          pnl: parseFloat(pnl),
-          pnl_amount: plAmt,
-          reason: 'Manual Stop'
+    try {
+        const token = localStorage.getItem('token');
+        // Call backend to kill all positions physically on Binance
+        const response = await fetch('http://localhost:10152/api/trading/emergency-stop', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ symbol: params.symbol })
         });
-      }
 
-      setBotState(prev => ({
-        ...prev,
-        tradeHistory: [{
-          symbol: params.symbol,
-          entry: prev.position.entryPrice,
-          exit: prev.currentPrice,
-          pnl: parseFloat(pnl),
-          reason: 'Manual Stop',
-          time: new Date()
-        }, ...prev.tradeHistory],
-        isRunning: false,
-        position: null
-      }));
-    } else {
-      setBotState(prev => ({ ...prev, isRunning: false }));
+        const data = await response.json();
+        
+        if (response.ok) {
+            addLog('✅ EMERGENCY STOP COMPLETE: Positions Closed.', 'success');
+            if (data.final_pnl !== undefined) {
+               addLog(`📉 Final P&L: ${data.final_pnl}`, 'info');
+            }
+            
+            // Sync local state if active trade
+            if (botState.position) {
+               setBotState(prev => ({ ...prev, position: null }));
+            }
+        } else {
+            // Fallback for simulation mode if backend fails
+            if (botState.position) {
+               const pnl = ((botState.currentPrice - botState.position.entryPrice) / botState.position.entryPrice * 100).toFixed(2);
+               addLog(`Bot Stopped Manually (Sim) - P&L: ${pnl}%`, 'warning');
+               setBotState(prev => ({ ...prev, position: null }));
+            }
+        }
+
+    } catch (error) {
+        addLog(`❌ Network Error on Stop: ${error.message}`, 'error');
+        // Fallback cleanup
+        setBotState(prev => ({ ...prev, position: null }));
     }
   };
 
@@ -496,7 +552,6 @@ export default function TradingBot() {
       return;
     }
 
-    // --- ENTRY VALIDATION ---
     if (!params.entryValue || params.entryValue <= 0) {
       addLog('⚠️ Please enter a valid entry amount (must be greater than 0)', 'error');
       return;
@@ -512,10 +567,14 @@ export default function TradingBot() {
       return;
     }
 
-    // ✅ NEW: Trailing validation
     if (params.trailingDistance <= 0 || params.trailingDistance >= 100) {
       addLog('Trailing distance must be between 0-100%', 'error');
       return;
+    }
+
+    // ✅ BUG-006 FIX: CHECK DAILY LOSS LIMIT
+    if (params.maxDailyLoss <= 0) {
+       addLog('⚠️ Warning: Max Daily Loss limit is not set or invalid!', 'warning');
     }
     
     try {
@@ -544,20 +603,16 @@ export default function TradingBot() {
       const exchange = priceData.exchange === 'UPSTOX' ? 'Upstox' : 'Binance';
       addLog(`Got LIVE price from ${exchange}: ${currentCurrency}${purchasePrice.toFixed(2)}`, 'success');
       
-      // --- WALLET DEDUCTION ---
       const walletAmount = params.entryValue; 
       const walletResult = await startTradeWithWallet(apiSymbol, walletAmount, purchasePrice);
       if (!walletResult.success) {
         addLog(`❌ Cannot start: ${walletResult.error}`, 'error');
         return;
       }
-      // ------------------------------------------
 
       const initialStopLoss = purchasePrice * (1 - params.initialStopLoss / 100);
       const targetPrice = purchasePrice * (1 + params.exitPercent / 100);
-      // const adjustTriggerPrice = purchasePrice * (1 + 0.02); // ❌ DELETED THIS LINE
       
-      // Save trade to database
       const entryTime = new Date();
       const tradeId = await saveTradeToDatabase({
         symbol: params.symbol,
@@ -567,7 +622,6 @@ export default function TradingBot() {
         target_price: targetPrice
       });
 
-      // ✅ UPDATED: Add highestPrice and trailingActive
       setBotState(prev => ({
         ...prev,
         isRunning: true,
@@ -575,8 +629,8 @@ export default function TradingBot() {
           entryPrice: purchasePrice,
           quantity: 1,
           entryTime: entryTime,
-          highestPrice: purchasePrice,    // ✅ NEW: Track highest price
-          trailingActive: false,           // ✅ NEW: Trailing activation flag
+          highestPrice: purchasePrice,
+          trailingActive: false,
           tradeId: tradeId
         },
         currentPrice: purchasePrice,
@@ -584,7 +638,6 @@ export default function TradingBot() {
         targetPrice: targetPrice
       }));
       
-      // ✅ UPDATED: Startup logs
       addLog(`🚀 Bot Started for ${params.symbol} - Entry: ${currentCurrency}${purchasePrice.toFixed(2)}`, 'success');
       addLog(`📉 Initial Stop Loss: ${currentCurrency}${initialStopLoss.toFixed(2)} (-${params.initialStopLoss}%)`, 'info');
       addLog(`🔄 Trailing Activates at: ${currentCurrency}${(purchasePrice * 1.02).toFixed(2)} (+2%)`, 'info');
@@ -598,7 +651,6 @@ export default function TradingBot() {
           const newPrice = simulatePrice(prev.currentPrice);
           let newState = { ...prev, currentPrice: newPrice };
           
-          // --- STOP LOSS CHECK ---
           if (newPrice <= prev.stopLossPrice) {
             const pnl = ((newPrice - prev.position.entryPrice) / prev.position.entryPrice * 100).toFixed(2);
             addLog(`STOP LOSS HIT at ${currentCurrency}${newPrice.toFixed(2)} - P&L: ${pnl}%`, 'error');
@@ -607,7 +659,6 @@ export default function TradingBot() {
             const plAmt = finalAmt - (params.entryValue || prev.position.entryPrice);
             closeTradeWithWallet(params.symbol, (params.entryValue || prev.position.entryPrice), finalAmt, plAmt);
             
-            // Close in database
             if (prev.position.tradeId) {
               closeTradeInDatabase(prev.position.tradeId, {
                 exit: newPrice,
@@ -634,8 +685,7 @@ export default function TradingBot() {
             };
           }
           
-          // --- 🔥 TARGET CHECK WITH 99.95% BUFFER (FIXED) ---
-          const targetThreshold = prev.targetPrice * 0.9995; // Trigger at 99.95% of target
+          const targetThreshold = prev.targetPrice * 0.9995;
           
           if (newPrice >= targetThreshold) {
             const pnl = ((newPrice - prev.position.entryPrice) / prev.position.entryPrice * 100).toFixed(2);
@@ -646,7 +696,6 @@ export default function TradingBot() {
             const plAmt = finalAmt - (params.entryValue || prev.position.entryPrice);
             closeTradeWithWallet(params.symbol, (params.entryValue || prev.position.entryPrice), finalAmt, plAmt);
 
-            // Close in database
             if (prev.position.tradeId) {
               closeTradeInDatabase(prev.position.tradeId, {
                 exit: newPrice,
@@ -673,24 +722,19 @@ export default function TradingBot() {
             };
           }
           
-          // ✅ NEW: TRAILING STOP LOSS LOGIC (REPLACED OLD SL ADJUSTMENT)
-          // Track highest price
           const highestPrice = Math.max(prev.position.highestPrice, newPrice);
           newState.position = { ...prev.position, highestPrice: highestPrice };
 
           const priceIncrease = ((newPrice - prev.position.entryPrice) / prev.position.entryPrice) * 100;
 
-          // Activate trailing when price hits +2%
           if (priceIncrease >= 2) {
             if (!prev.position.trailingActive) {
               addLog(`🔄 Trailing Stop Loss ACTIVATED at +${priceIncrease.toFixed(2)}%`, 'warning');
               newState.position.trailingActive = true;
             }
 
-            // Calculate trailing stop loss
             const trailingSL = highestPrice * (1 - params.trailingDistance / 100);
 
-            // Only move SL UP, never down
             if (trailingSL > prev.stopLossPrice) {
               const slChange = ((trailingSL - prev.stopLossPrice) / prev.stopLossPrice * 100).toFixed(2);
               addLog(`📈 Trailing SL moved to ${currentCurrency}${trailingSL.toFixed(2)} (+${slChange}% from previous SL)`, 'info');
@@ -782,15 +826,25 @@ export default function TradingBot() {
     };
   }, []);
   
-  // Load trade history when component mounts
   useEffect(() => {
     loadTradeHistory();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Run only once on mount
+  }, []); 
   
   const currentPnL = botState.position 
     ? ((botState.currentPrice - botState.position.entryPrice) / botState.position.entryPrice * 100).toFixed(2)
     : 0;
+
+  if (!userData) {
+    return (
+      <div className={`min-h-screen flex items-center justify-center ${isDark ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-900'}`}>
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-yellow-400 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <h2 className="text-xl font-bold">Loading Account...</h2>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`min-h-screen transition-colors duration-300 relative overflow-hidden ${
@@ -799,20 +853,36 @@ export default function TradingBot() {
         : 'bg-gradient-to-br from-gray-100 via-blue-50 to-gray-100'
     } p-6`}>
       
-      {/* CLEAN BACKGROUND */}
+      {showConnectModal && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80">
+          <div className="relative w-full max-w-md">
+            <button 
+              onClick={() => setShowConnectModal(false)}
+              className="absolute top-4 right-4 z-10 text-white bg-red-600 rounded-full w-8 h-8 flex items-center justify-center font-bold hover:bg-red-700 transition-colors"
+            >X</button>
+            <ConnectExchange 
+              userId={userData.id} 
+              token={localStorage.getItem('token')}
+              onLinkSuccess={() => {
+                setShowConnectModal(false); 
+                checkLinkStatus(); 
+              }} 
+            />
+          </div>
+        </div>
+      )}
+
       <div className="absolute inset-0 opacity-5 pointer-events-none">
         <div className="absolute top-0 left-0 w-96 h-96 bg-yellow-400 rounded-full mix-blend-multiply filter blur-3xl"></div>
         <div className="absolute top-1/2 right-0 w-96 h-96 bg-blue-400 rounded-full mix-blend-multiply filter blur-3xl"></div>
         <div className="absolute bottom-0 left-1/3 w-96 h-96 bg-purple-400 rounded-full mix-blend-multiply filter blur-3xl"></div>
       </div>
 
-      {/* CONTENT */}
       <div className="relative z-10 max-w-7xl mx-auto">
         <div className={`rounded-xl shadow-2xl overflow-hidden transition-colors duration-300 ${
           isDark ? 'bg-gray-800' : 'bg-white'
         }`}>
           
-          {/* HEADER */}
           <div className={`bg-gradient-to-r transition-all duration-300 relative overflow-visible z-50 ${
             isDark 
               ? 'from-gray-900 via-slate-800 to-gray-900 border-b-4 border-yellow-500' 
@@ -825,7 +895,7 @@ export default function TradingBot() {
                   isDark ? 'text-yellow-400' : 'text-gray-900'
                 }`}>
                   <TrendingUp className="w-8 h-8" />
-                  Dynamic Stop Loss Trading Bot
+                  SmartTrade Bot {isLinked ? '(Binance Linked)' : '(Local Wallet)'}
                 </h1>
                 <p className={`mt-2 ${
                   isDark ? 'text-gray-300' : 'text-gray-900'
@@ -834,7 +904,30 @@ export default function TradingBot() {
                 </p>
               </div>
               <div className="flex items-center gap-4">
-                {/* THEME TOGGLE */}
+                
+                {!isLinked ? (
+                  <button 
+                    onClick={() => setShowConnectModal(true)}
+                    className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold shadow transition-all"
+                  >
+                    <Link className="w-4 h-4" /> Link Binance
+                  </button>
+                ) : (
+                  <button 
+                    onClick={handleUnlink}
+                    disabled={unlinking}
+                    className="flex items-center gap-2 px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 font-bold shadow transition-all"
+                  >
+                    {unlinking ? (
+                      "Disconnecting..."
+                    ) : (
+                      <>
+                        <Unlink className="w-4 h-4" /> Unlink
+                      </>
+                    )}
+                  </button>
+                )}
+
                 <button
                   onClick={toggleTheme}
                   className={`p-3 rounded-full transition-all duration-300 ${
@@ -851,6 +944,7 @@ export default function TradingBot() {
             </div>
           </div>
 
+          {/* ✅ BUG-004 FIX: Mobile Responsive Grid (grid-cols-1 md:grid-cols-3) */}
           <div className="p-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* PARAMETERS */}
             <div className="lg:col-span-1 space-y-4">
@@ -989,7 +1083,6 @@ export default function TradingBot() {
                     />
                   </div>
                   
-                  {/* ✅ NEW: TRAILING DISTANCE INPUT */}
                   <div>
                     <label className={`block text-sm font-medium mb-1 ${
                       isDark ? 'text-gray-200' : 'text-slate-700'
@@ -1014,6 +1107,28 @@ export default function TradingBot() {
                       SL follows price at {params.trailingDistance}% distance
                     </p>
                   </div>
+
+                  {/* ✅ BUG-006: Max Daily Loss Input */}
+                  <div>
+                    <label className={`block text-sm font-medium mb-1 ${
+                      isDark ? 'text-gray-200' : 'text-slate-700'
+                    }`}>
+                      Max Daily Loss Limit ($)
+                    </label>
+                    <input
+                      type="number"
+                      value={params.maxDailyLoss}
+                      onChange={(e) => setParams({...params, maxDailyLoss: parseFloat(e.target.value)})}
+                      disabled={botState.isRunning}
+                      className={`w-full px-3 py-2 border-2 rounded-lg focus:ring-2 focus:ring-red-500 disabled:opacity-50 transition-colors ${
+                        isDark 
+                          ? 'bg-gray-600 border-gray-500 text-white' 
+                          : 'border-yellow-300 bg-white text-slate-900'
+                      }`}
+                    />
+                    <p className="text-xs text-red-400 mt-1">Bot stops immediately if loss exceeds this.</p>
+                  </div>
+
                 </div>
                 
                 <button
@@ -1027,7 +1142,7 @@ export default function TradingBot() {
                   {botState.isRunning ? (
                     <>
                       <Square className="w-5 h-5" />
-                      Stop Bot
+                      EMERGENCY STOP (Panic)
                     </>
                   ) : (
                     <>

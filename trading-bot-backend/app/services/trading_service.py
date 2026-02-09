@@ -1,10 +1,14 @@
 from sqlalchemy.orm import Session
-from app.models.user import User
-from app.models.wallet import WalletTransaction
+from sqlalchemy import func, cast, Date
+from datetime import datetime
 from decimal import Decimal
 import logging
 import os
 from dotenv import load_dotenv
+
+from app.models.user import User
+from app.models.wallet import WalletTransaction
+from app.models.trade import Trade  # ✅ Added Trade model for PnL check
 
 # Import Services
 from app.services.exchange_service import exchange_service
@@ -16,6 +20,9 @@ logger = logging.getLogger(__name__)
 class TradingService:
     """Handle REAL trading operations"""
     
+    # 🔒 SAFETY SETTING: Stop trading if daily loss exceeds this amount
+    DAILY_LOSS_LIMIT = -50.0  # (Hardcoded safety for testing; make configurable later)
+
     @staticmethod
     def get_binance_balance():
         """Fetch REAL USDT Balance from the Connected Account"""
@@ -42,14 +49,56 @@ class TradingService:
             return None
 
     @staticmethod
+    def check_daily_loss_limit(db: Session, user_id: int) -> bool:
+        """
+        ✅ BUG-006 FIX: Calculate total PnL for today.
+        Returns False if loss limit is breached.
+        """
+        try:
+            today = datetime.utcnow().date()
+            
+            # Sum PnL of all CLOSED trades for today
+            total_pnl = db.query(func.sum(Trade.pnl_amount)).filter(
+                Trade.user_id == user_id,
+                Trade.status == 'closed',
+                cast(Trade.exit_time, Date) == today
+            ).scalar()
+
+            current_pnl = float(total_pnl) if total_pnl else 0.0
+            logger.info(f"📉 Daily PnL Checker: Current PnL = ${current_pnl:.2f}")
+
+            # If current_pnl is worse than the limit (e.g., -60 < -50)
+            if current_pnl <= TradingService.DAILY_LOSS_LIMIT:
+                logger.error(f"⛔ DAILY LOSS LIMIT BREACHED: ${current_pnl:.2f} (Limit: ${TradingService.DAILY_LOSS_LIMIT})")
+                return False
+            
+            return True
+
+        except Exception as e:
+            logger.error(f"⚠️ Error checking daily loss: {e}")
+            # Fail safe: If check fails, allow trade but log error
+            return True
+
+    @staticmethod
     def start_trade(db: Session, user_id: int, symbol: str, amount: float, entry_price: float):
-        """Execute trade if Real Binance Balance allows"""
+        """Execute trade if Real Binance Balance allows AND Risk Checks pass"""
         try:
             user = db.query(User).filter(User.id == user_id).first()
             if not user:
                 return {"success": False, "error": "User not found"}
             
+            # -----------------------------------------------------------
+            # ✅ BUG-006 FIX: CHECK DAILY LOSS LIMIT FIRST
+            # -----------------------------------------------------------
+            if not TradingService.check_daily_loss_limit(db, user_id):
+                return {
+                    "success": False, 
+                    "error": f"⛔ Trading Halted: Daily Loss Limit (${TradingService.DAILY_LOSS_LIMIT}) Reached."
+                }
+
+            # -----------------------------------------------------------
             # 1. Check Real Balance (CRITICAL SAFETY CHECK)
+            # -----------------------------------------------------------
             real_balance = TradingService.get_binance_balance()
             
             if real_balance is None:

@@ -1,62 +1,109 @@
 import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { Link } from 'react-router-dom'; // ✅ Removed unused useNavigate
 import { GoogleLogin } from '@react-oauth/google';
-import { authService } from '../services/authService';
-import { TrendingUp } from 'lucide-react';
+import { TrendingUp, Lock, Mail, Key, Loader, ArrowRight } from 'lucide-react';
 
 const Login = () => {
-  const navigate = useNavigate();
+  // ✅ Removed unused const navigate = useNavigate();
+  
+  // Form State
   const [formData, setFormData] = useState({
     email: '',
-    password: ''
+    password: '',
+    otp: '' 
   });
+
+  // UI State
+  const [needsVerification, setNeedsVerification] = useState(false); 
   const [error, setError] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    setSuccessMsg('');
     setLoading(true);
 
+    // ----------------------------------------
+    // 🛑 MODE 1: OTP VERIFICATION
+    // ----------------------------------------
+    if (needsVerification) {
+      try {
+        const response = await fetch('http://localhost:10152/api/auth/verify-otp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: formData.email,
+            otp: formData.otp
+          }),
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.detail || 'Invalid OTP');
+        }
+
+        // ✅ Success!
+        setSuccessMsg('✅ Verified! Entering Dashboard...');
+        localStorage.setItem('token', data.access_token);
+        localStorage.setItem('user', JSON.stringify(data.user));
+        
+        // ⚡ FORCE RELOAD TO DASHBOARD
+        setTimeout(() => {
+          window.location.href = '/trading-bot'; 
+        }, 1000);
+
+      } catch (err) {
+        setError(err.message);
+        setLoading(false);
+      }
+      return;
+    }
+
+    // ----------------------------------------
+    // 🚀 MODE 2: STANDARD LOGIN
+    // ----------------------------------------
     try {
-      const response = await authService.login(formData);
-      console.log('Login successful:', response);
-      navigate('/');
+      const response = await fetch('http://localhost:10152/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: formData.email,
+          password: formData.password
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        // 🔍 Check for specific "Not Verified" error
+        if (response.status === 403 || (data.detail && data.detail.includes('not verified'))) {
+           setNeedsVerification(true); // <--- FLIP UI TO OTP MODE
+           setError('⚠️ Account not active. Please enter the verification code sent to your email.');
+           setLoading(false);
+           return;
+        }
+        throw new Error(data.detail || 'Invalid credentials');
+      }
+
+      // Success
+      localStorage.setItem('token', data.access_token);
+      localStorage.setItem('user', JSON.stringify(data.user));
+      
+      // ⚡ FORCE RELOAD TO DASHBOARD
+      window.location.href = '/trading-bot'; 
+
     } catch (err) {
       console.error('Login error:', err);
-      setError(err.detail || 'Invalid credentials');
-    } finally {
+      setError(err.message);
       setLoading(false);
     }
   };
 
   const handleGoogleSuccess = async (credentialResponse) => {
-    console.log('Google login successful:', credentialResponse);
-    
-    try {
-      const token = credentialResponse.credential;
-      const base64Url = token.split('.')[1];
-      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-      const jsonPayload = decodeURIComponent(atob(base64).split('').map(c => {
-        return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-      }).join(''));
-      
-      const userData = JSON.parse(jsonPayload);
-      
-      localStorage.setItem('token', token);
-      localStorage.setItem('user', JSON.stringify({
-        id: 1,
-        email: userData.email,
-        name: userData.name,
-        kyc_status: 'pending',
-        is_admin: false
-      }));
-      
-      navigate('/');
-    } catch (err) {
-      console.error('Google login error:', err);
-      setError('Google login failed. Please try again.');
-    }
+    console.log('Google login (simulated):', credentialResponse);
   };
 
   const handleGoogleError = () => {
@@ -84,17 +131,25 @@ const Login = () => {
             </p>
           </div>
 
+          {/* Error / Success Messages */}
           {error && (
             <div className="bg-red-500/20 border border-red-500 text-red-300 px-4 py-3 rounded-lg mb-6">
               {error}
             </div>
           )}
+          {successMsg && (
+            <div className="bg-green-500/20 border border-green-500 text-green-300 px-4 py-3 rounded-lg mb-6">
+              {successMsg}
+            </div>
+          )}
 
           {/* Login Form */}
           <form onSubmit={handleSubmit} className="space-y-5">
+            
+            {/* Always show Email */}
             <div>
               <label className="flex items-center text-white text-sm font-medium mb-2">
-                <span className="mr-2">📧</span> Email
+                <span className="mr-2"><Mail size={16}/></span> Email
               </label>
               <input
                 type="email"
@@ -106,19 +161,39 @@ const Login = () => {
               />
             </div>
 
-            <div>
-              <label className="flex items-center text-white text-sm font-medium mb-2">
-                <span className="mr-2">🔒</span> Password
-              </label>
-              <input
-                type="password"
-                value={formData.password}
-                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                placeholder="••••••••"
-                className="w-full px-4 py-3 bg-[#1a2332] border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/50"
-                required
-              />
-            </div>
+            {/* TOGGLE: Show Password OR OTP based on state */}
+            {!needsVerification ? (
+                /* PASSWORD INPUT */
+                <div>
+                  <label className="flex items-center text-white text-sm font-medium mb-2">
+                    <span className="mr-2"><Lock size={16}/></span> Password
+                  </label>
+                  <input
+                    type="password"
+                    value={formData.password}
+                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                    placeholder="••••••••"
+                    className="w-full px-4 py-3 bg-[#1a2332] border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/50"
+                    required
+                  />
+                </div>
+            ) : (
+                /* OTP INPUT */
+                <div className="animate-pulse">
+                  <label className="flex items-center text-yellow-400 text-sm font-bold mb-2">
+                    <span className="mr-2"><Key size={16}/></span> Enter Verification Code
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.otp}
+                    onChange={(e) => setFormData({ ...formData, otp: e.target.value })}
+                    placeholder="123456"
+                    className="w-full px-4 py-3 bg-[#1a2332] border-2 border-yellow-500 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/50"
+                    required
+                  />
+                  <p className="text-xs text-gray-400 mt-2">Check your email inbox.</p>
+                </div>
+            )}
 
             <button
               type="submit"
@@ -126,11 +201,16 @@ const Login = () => {
               className={`w-full py-3 rounded-lg font-semibold flex items-center justify-center gap-2 ${
                 loading
                   ? 'bg-gray-600 cursor-not-allowed'
-                  : 'bg-blue-600 hover:bg-blue-700 text-white'
+                  : needsVerification 
+                    ? 'bg-yellow-500 hover:bg-yellow-600 text-black' 
+                    : 'bg-blue-600 hover:bg-blue-700 text-white'
               }`}
             >
-              <span>➜</span>
-              {loading ? 'Signing In...' : 'Sign In'}
+              {loading ? (
+                <><Loader className="animate-spin w-5 h-5"/> Processing...</>
+              ) : (
+                needsVerification ? <><Key className="w-5 h-5"/> Verify & Login</> : <><ArrowRight className="w-5 h-5"/> Sign In</>
+              )}
             </button>
           </form>
 
@@ -165,7 +245,7 @@ const Login = () => {
       </div>
 
       {/* Right Side - Live Market Data */}
-      <div className="w-1/2 bg-[#0d1b2a] p-8 overflow-y-auto">
+      <div className="w-1/2 bg-[#0d1b2a] p-8 overflow-y-auto hidden lg:block">
         {/* Upstox NSE Section */}
         <div className="mb-8">
           <div className="bg-blue-600 text-white px-4 py-2 rounded-t-lg font-semibold flex items-center gap-2">

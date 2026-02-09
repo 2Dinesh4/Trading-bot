@@ -22,14 +22,26 @@ function App() {
         <Router>
           <div className="App">
             <Routes>
+              {/* Public Routes */}
               <Route path="/login" element={<Login />} />
               <Route path="/signup" element={<Signup />} />
               
+              {/* ✅ Explicit Trading Bot Route */}
+              <Route
+                path="/trading-bot"
+                element={
+                  <ProtectedRoute>
+                    <TradingBot />
+                  </ProtectedRoute>
+                }
+              />
+
+              {/* Default Redirect to Trading Bot */}
               <Route
                 path="/"
                 element={
                   <ProtectedRoute>
-                    <TradingBot />
+                    <Navigate to="/trading-bot" replace />
                   </ProtectedRoute>
                 }
               />
@@ -71,6 +83,7 @@ function App() {
                 }
               />
               
+              {/* Catch-all: Send unknown paths to Login */}
               <Route path="*" element={<Navigate to="/login" replace />} />
             </Routes>
           </div>

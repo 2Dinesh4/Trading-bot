@@ -20,6 +20,8 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
         expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     
     to_encode.update({"exp": expire})
+    
+    # ✅ FIX: Explicitly encode with HS256
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     
     return encoded_jwt
@@ -27,6 +29,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 def verify_token(token: str) -> Optional[dict]:
     """Verify and decode JWT token"""
     try:
+        # ✅ FIX: explicitly pass algorithms as a list
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         return payload
     except JWTError:
@@ -35,7 +38,10 @@ def verify_token(token: str) -> Optional[dict]:
 def decode_token(token: str) -> dict:
     """Decode JWT token (raises exception on failure)"""
     try:
+        # ✅ FIX: explicitly pass algorithms as a list
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         return payload
     except JWTError as e:
+        # Log error but raise a clean exception
+        print(f"❌ JWT Error: {str(e)}")
         raise Exception(f"Invalid token: {str(e)}")

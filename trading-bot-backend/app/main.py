@@ -9,15 +9,14 @@ from app.database import engine, Base, SessionLocal
 from pydantic import BaseModel
 import logging
 import os
-import asyncio  # ✅ Added for background tasks
+import asyncio
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from pathlib import Path
 
-# ✅ Import Models & Services for Auto-Sync
+# Import Services
 from app.models.user import User
 from app.services.trading_engine import trading_engine
-from app.services.trading_service import trading_service  # ✅ Import Trading Service
 
 # Import API routers
 from app.api.auth import router as auth_router
@@ -35,7 +34,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="SmartTrade API",
     description="Multi-User Trading Bot with KYC and Wallet",
-    version="3.0.0"
+    version="3.1.0"
 )
 
 # CORS
@@ -48,12 +47,10 @@ app.add_middleware(
     expose_headers=["*"]
 )
 
-# ✅ Mount static files for KYC documents
+# Static files
 UPLOAD_DIR = Path("app/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-
 app.mount("/uploads", StaticFiles(directory="app/uploads"), name="uploads")
-logger.info("✅ Static file serving enabled: /uploads")
 
 # Include API routers
 app.include_router(auth_router)
@@ -64,11 +61,6 @@ app.include_router(wallet_router)
 app.include_router(trading_router)
 app.include_router(trades_router)
 
-# Request model
-class OrderRequest(BaseModel):
-    symbol: str
-    quantity: float
-
 # Database dependency
 def get_db():
     db = SessionLocal()
@@ -77,145 +69,48 @@ def get_db():
     finally:
         db.close()
 
-# -------------------------------------------------------------------
-# 🔄 AUTO-SYNC WALLET FUNCTION
-# -------------------------------------------------------------------
-async def sync_wallet_on_startup():
-    """
-    Connects to Binance, fetches REAL USDT balance, 
-    and updates the Local Database to match it exactly.
-    """
-    print("\n🔄 SYNC: Checking Real Binance Balance...")
-    try:
-        real_balance = trading_service.get_binance_balance()
-        
-        if real_balance is not None:
-            db = SessionLocal()
-            try:
-                # Assuming Admin/Main User is ID 1
-                user = db.query(User).filter(User.id == 1).first()
-                if user:
-                    old_balance = float(user.wallet_balance)
-                    user.wallet_balance = real_balance
-                    db.commit()
-                    print(f"💰 WALLET SYNCED: DB was ${old_balance:.2f} -> Now ${real_balance:.2f} (Real)")
-                else:
-                    print("⚠️ User ID 1 not found. Skipping wallet sync.")
-            finally:
-                db.close()
-        else:
-            print("⚠️ Could not fetch Binance balance (Keys missing or Network issue). Skipping sync.")
-            
-    except Exception as e:
-        print(f"❌ Wallet Sync Failed: {e}")
-# -------------------------------------------------------------------
+# ✅ CRITICAL FIX: This endpoint was missing, causing the 404 error
+@app.get("/api/price/{symbol}")
+async def get_price(symbol: str):
+    """Get price from any exchange (Public Endpoint)"""
+    if not symbol:
+        return {"success": False, "error": "Invalid symbol"}
+    
+    # Use exchange service to fetch price
+    return exchange_service.get_price(symbol)
 
 @app.on_event("startup")
 async def startup_event():
-    # Initialize database tables
     try:
         Base.metadata.create_all(bind=engine)
         print("✅ Database: Tables created/verified")
     except Exception as e:
         print(f"⚠️ Database: {str(e)}")
     
-    binance_key = os.getenv("BINANCE_API_KEY")
-    upstox_key = os.getenv("UPSTOX_API_KEY")
-    database_url = os.getenv("DATABASE_URL")
-    
     print("\n" + "="*60)
-    print("🚀 SmartTrade API v3.0 - Multi-User with KYC")
+    print("🚀 SmartTrade API v3.1 - BYOK & Live Prices")
     print("="*60)
     
-    if binance_key and "PLACEHOLDER" not in binance_key:
-        print("✅ Binance (Crypto) - Keys Configured")
-    else:
-        print("⚠️ Binance (Crypto) - Waiting for Keys")
-    
-    if upstox_key:
-        print("✅ Upstox (Indian Stocks)")
-    else:
-        print("❌ Upstox (Indian Stocks)")
-    
-    if database_url:
-        print("✅ Database (PostgreSQL)")
-    
-    # ✅ Show upload directory
-    print(f"✅ KYC Uploads: {UPLOAD_DIR.absolute()}")
-    
-    # ✅ RUN AUTO-SYNC
-    await sync_wallet_on_startup()
-    
-    # ✅ START THE TRADING ENGINE
+    # Start Engine
     asyncio.create_task(trading_engine.run_loop())
-    print("✅ Background Trading Engine Started (Monitoring Prices...)")
-    
+    print("✅ Background Trading Engine Started")
     print("="*60 + "\n")
 
 @app.on_event("shutdown")
 async def shutdown_event():
     print("\n🛑 Shutting down SmartTrade API...")
-    # Stop the engine gracefully
     trading_engine.running = False
 
 @app.get("/")
 async def root():
     return {
-        "message": "SmartTrade Multi-User Bot with KYC",
-        "version": "3.0.0",
-        "features": [
-            "Multi-user authentication",
-            "KYC verification",
-            "Per-user API keys",
-            "Admin panel",
-            "Trade history tracking",
-            "Document upload & viewing",
-            "Automated Trading Engine"
-        ]
+        "message": "SmartTrade Platform Active",
+        "version": "3.1.0",
+        "mode": "Multi-User BYOK"
     }
-
-@app.get("/api/price/{symbol}")
-async def get_price(symbol: str):
-    """Get price from any exchange"""
-    if not symbol or not isinstance(symbol, str):
-        return {"success": False, "error": "Invalid symbol provided"}
-
-    result = exchange_service.get_price(symbol)
-    return result
-
-@app.post("/api/order/buy")
-async def place_buy_order(request: OrderRequest, db: Session = Depends(get_db)):
-    """Place BUY order"""
-    logger.info(f"🟢 BUY: {request.symbol}")
-    result = exchange_service.place_order(request.symbol, 'BUY', request.quantity)
-    
-    if result.get("success"):
-        try:
-            logger.info(f"💾 Order logged to database")
-        except Exception as e:
-            logger.error(f"Database logging failed: {str(e)}")
-    
-    return result
-
-@app.post("/api/order/sell")
-async def place_sell_order(request: OrderRequest, db: Session = Depends(get_db)):
-    """Place SELL order"""
-    logger.info(f"🔴 SELL: {request.symbol}")
-    result = exchange_service.place_order(request.symbol, 'SELL', request.quantity)
-    
-    if result.get("success"):
-        try:
-            logger.info(f"💾 Order logged to database")
-        except Exception as e:
-            logger.error(f"Database logging failed: {str(e)}")
-    
-    return result
 
 @app.get("/api/health")
 async def health_check(db: Session = Depends(get_db)):
-    binance_status = "connected" if exchange_service.binance_client else "disconnected"
-    upstox_status = "connected" if exchange_service.upstox_market_api else "disconnected"
-    
     try:
         db.execute(text("SELECT 1"))
         db_status = "connected"
@@ -224,22 +119,6 @@ async def health_check(db: Session = Depends(get_db)):
 
     return {
         "status": "healthy",
-        "binance": binance_status,
-        "upstox": upstox_status,
         "database": db_status,
         "engine": "running" if trading_engine.running else "stopped"
-    }
-
-@app.get("/api/supported-stocks")
-async def get_stocks():
-    """List supported Indian stocks"""
-    # Safety check for accessing the stock map
-    stocks = getattr(exchange_service, "supported_stocks", [])
-    if hasattr(exchange_service, "indian_stock_map"):
-         stocks = list(exchange_service.indian_stock_map.keys())
-         
-    return {
-        "success": True,
-        "stocks": stocks,
-        "count": len(stocks)
     }
