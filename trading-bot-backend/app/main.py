@@ -14,8 +14,14 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from pathlib import Path
 
-# Import Services
+# --- CRITICAL: Import ALL Models here so Base knows to create their tables ---
 from app.models.user import User
+from app.models.trade import Trade
+from app.models.wallet import Wallet
+from app.models.api_keys import APIKey
+from app.models.kyc import KYC
+# ---------------------------------------------------------------------------
+
 from app.services.trading_engine import trading_engine
 
 # Import API routers
@@ -37,7 +43,7 @@ app = FastAPI(
     version="3.1.0"
 )
 
-# CORS
+# CORS - Allow Frontend access
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://localhost:3001"],
@@ -69,7 +75,7 @@ def get_db():
     finally:
         db.close()
 
-# ✅ CRITICAL FIX: This endpoint was missing, causing the 404 error
+# ✅ Price Endpoint
 @app.get("/api/price/{symbol}")
 async def get_price(symbol: str):
     """Get price from any exchange (Public Endpoint)"""
@@ -79,21 +85,25 @@ async def get_price(symbol: str):
     # Use exchange service to fetch price
     return exchange_service.get_price(symbol)
 
+# ✅ STARTUP EVENT: Creates Tables & Starts Engine
 @app.on_event("startup")
 async def startup_event():
-    try:
-        Base.metadata.create_all(bind=engine)
-        print("✅ Database: Tables created/verified")
-    except Exception as e:
-        print(f"⚠️ Database: {str(e)}")
-    
     print("\n" + "="*60)
-    print("🚀 SmartTrade API v3.1 - BYOK & Live Prices")
+    print("🚀 STARTING SMARTTRADE API v3.1")
     print("="*60)
-    
-    # Start Engine
+
+    # 1. Create Database Tables
+    try:
+        # This will create Users, Trades, Wallets, etc. if they don't exist
+        Base.metadata.create_all(bind=engine)
+        print("✅ Database: Tables checked & created successfully.")
+    except Exception as e:
+        print(f"⚠️ Database Error: {str(e)}")
+        print("   (If using Docker, ensure the DB container is running)")
+
+    # 2. Start Trading Engine
     asyncio.create_task(trading_engine.run_loop())
-    print("✅ Background Trading Engine Started")
+    print("✅ Trading Engine: Background loop started.")
     print("="*60 + "\n")
 
 @app.on_event("shutdown")
@@ -106,12 +116,14 @@ async def root():
     return {
         "message": "SmartTrade Platform Active",
         "version": "3.1.0",
-        "mode": "Multi-User BYOK"
+        "mode": "Multi-User BYOK",
+        "docs": "/docs"
     }
 
 @app.get("/api/health")
 async def health_check(db: Session = Depends(get_db)):
     try:
+        # Simple query to check DB connection
         db.execute(text("SELECT 1"))
         db_status = "connected"
     except Exception as e:
