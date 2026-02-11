@@ -1,6 +1,7 @@
 version: '3.8'
 
 services:
+  # Database
   db:
     image: postgres:13
     volumes:
@@ -12,17 +13,19 @@ services:
     ports:
       - "5432:5432"
 
+  # Backend API (Python)
   backend:
     build: ./trading-bot-backend
     volumes:
       - ./trading-bot-backend:/app
     ports:
-      - "8000:8000"
+      - "10152:8000"  # <--- CRITICAL FIX: External 10152 -> Internal 8000
     environment:
       - DATABASE_URL=postgresql://smarttrade_user:password123@db:5432/smarttrade_db
     depends_on:
       - db
 
+  # Frontend UI (React)
   frontend:
     build: ./trading-bot
     volumes:
@@ -31,7 +34,8 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - REACT_APP_API_URL=http://localhost:8000
+      - REACT_APP_API_URL=http://localhost:10152  # <--- CRITICAL FIX: Matches the port above
+      - CHOKIDAR_USEPOLLING=true # Essential for Windows hot-reloading
     depends_on:
       - backend
 

@@ -3,6 +3,7 @@ from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.database import Base
 
+# 1. Define the class as "UserAPIKey" (Matches exchange_service.py)
 class UserAPIKey(Base):
     """User-specific API keys for exchanges (Encrypted)"""
     __tablename__ = "user_api_keys"
@@ -29,3 +30,7 @@ class UserAPIKey(Base):
     
     # Relationship
     user = relationship("User", back_populates="api_keys")
+
+# 2. Create an Alias (Matches main.py)
+# This tells Python: "If anyone looks for 'APIKey', give them 'UserAPIKey'"
+APIKey = UserAPIKey

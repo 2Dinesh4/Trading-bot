@@ -20,3 +20,7 @@ class KYCDocument(Base):
 
     # Relationship
     user = relationship("User", back_populates="kyc_documents")
+
+# --- THE FIX ---
+# This line tells Python: "If main.py asks for 'KYC', give it 'KYCDocument'"
+KYC = KYCDocument

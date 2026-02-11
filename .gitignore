@@ -1,17 +1,29 @@
-"project softwares/postgresql-18.0-2-windows-x64.exe" 
-.trading-bot-backend/.gitignore
+# --- Python & Backend ---
 __pycache__/
 *.pyc
-.env
+*.pyo
+*.pyd
+.venv
 venv/
-
-# Ignore local temporary files
-*.txt
-*.py
-uploads/
-
-
-__pycache__/
-*.pyc
+env/
 .env
-trading-bot-backend/app/uploads/
+
+# --- Frontend ---
+node_modules/
+build/
+dist/
+.DS_Store
+
+# --- Database & Docker ---
+tradingbot_postgres_data/
+*.sqlite3
+*.log
+
+# --- IDEs & Misc ---
+.vscode/
+.idea/
+*.exe
+
+# --- Ignore Large Installer Files ---
+project softwares/
+uploads/
