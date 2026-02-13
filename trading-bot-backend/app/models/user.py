@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Float
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.database import Base
@@ -8,18 +8,24 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String, unique=True, index=True, nullable=False)
+    name = Column(String, nullable=True)
     hashed_password = Column(String, nullable=False)
+    avatar = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
     
-    # Matching auth.py logic
-    full_name = Column(String, nullable=True) 
-    phone_number = Column(String, nullable=True)
+    wallet_balance = Column(Float, default=0.0)
+    daily_pnl = Column(Float, default=0.0)
+    last_trade_date = Column(DateTime, nullable=True)
     
-    is_active = Column(Boolean, default=False) # Default to False for OTP
+    is_active = Column(Boolean, default=False)  # Default to False for OTP
     is_admin = Column(Boolean, default=False)
     
-    # OTP Fields (Added for Authentication)
+    # OTP Fields
     otp_code = Column(String, nullable=True)
     otp_expires_at = Column(DateTime, nullable=True)
+
+    # Auth Provider (e.g., "google", "local")
+    provider = Column(String, nullable=True)
 
     # KYC Status Fields
     kyc_status = Column(String, default="pending") 

@@ -1,20 +1,18 @@
 import React, { useState } from 'react';
-import { Link } from 'react-router-dom'; // ✅ Removed unused useNavigate
+import { Link } from 'react-router-dom';
 import { GoogleLogin } from '@react-oauth/google';
 import { TrendingUp, Lock, Mail, Key, Loader, ArrowRight } from 'lucide-react';
 
 const Login = () => {
-  // ✅ Removed unused const navigate = useNavigate();
-  
   // Form State
   const [formData, setFormData] = useState({
     email: '',
     password: '',
-    otp: '' 
+    otp: ''
   });
 
   // UI State
-  const [needsVerification, setNeedsVerification] = useState(false); 
+  const [needsVerification, setNeedsVerification] = useState(false);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [loading, setLoading] = useState(false);
@@ -25,9 +23,7 @@ const Login = () => {
     setSuccessMsg('');
     setLoading(true);
 
-    // ----------------------------------------
     // 🛑 MODE 1: OTP VERIFICATION
-    // ----------------------------------------
     if (needsVerification) {
       try {
         const response = await fetch('http://localhost:10152/api/auth/verify-otp', {
@@ -49,10 +45,9 @@ const Login = () => {
         setSuccessMsg('✅ Verified! Entering Dashboard...');
         localStorage.setItem('token', data.access_token);
         localStorage.setItem('user', JSON.stringify(data.user));
-        
-        // ⚡ FORCE RELOAD TO DASHBOARD
+
         setTimeout(() => {
-          window.location.href = '/trading-bot'; 
+          window.location.href = '/trading-bot';
         }, 1000);
 
       } catch (err) {
@@ -62,9 +57,7 @@ const Login = () => {
       return;
     }
 
-    // ----------------------------------------
     // 🚀 MODE 2: STANDARD LOGIN
-    // ----------------------------------------
     try {
       const response = await fetch('http://localhost:10152/api/auth/login', {
         method: 'POST',
@@ -80,10 +73,10 @@ const Login = () => {
       if (!response.ok) {
         // 🔍 Check for specific "Not Verified" error
         if (response.status === 403 || (data.detail && data.detail.includes('not verified'))) {
-           setNeedsVerification(true); // <--- FLIP UI TO OTP MODE
-           setError('⚠️ Account not active. Please enter the verification code sent to your email.');
-           setLoading(false);
-           return;
+          setNeedsVerification(true);
+          setError('⚠️ Account not active. Please enter the verification code sent to your email.');
+          setLoading(false);
+          return;
         }
         throw new Error(data.detail || 'Invalid credentials');
       }
@@ -91,9 +84,8 @@ const Login = () => {
       // Success
       localStorage.setItem('token', data.access_token);
       localStorage.setItem('user', JSON.stringify(data.user));
-      
-      // ⚡ FORCE RELOAD TO DASHBOARD
-      window.location.href = '/trading-bot'; 
+
+      window.location.href = '/trading-bot';
 
     } catch (err) {
       console.error('Login error:', err);
@@ -102,8 +94,33 @@ const Login = () => {
     }
   };
 
+  // ✅ FIXED: Google Handler
   const handleGoogleSuccess = async (credentialResponse) => {
-    console.log('Google login (simulated):', credentialResponse);
+    console.log('Google login credential:', credentialResponse);
+    setError('');
+
+    try {
+      const res = await fetch("http://localhost:10152/api/auth/google", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: credentialResponse.credential }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.detail || "Google Login Failed");
+      }
+
+      // Login Success
+      localStorage.setItem('token', data.access_token);
+      localStorage.setItem('user', JSON.stringify(data.user));
+      window.location.href = '/trading-bot';
+
+    } catch (err) {
+      console.error("Google error:", err);
+      setError(err.message || 'Google login failed.');
+    }
   };
 
   const handleGoogleError = () => {
@@ -145,11 +162,11 @@ const Login = () => {
 
           {/* Login Form */}
           <form onSubmit={handleSubmit} className="space-y-5">
-            
+
             {/* Always show Email */}
             <div>
               <label className="flex items-center text-white text-sm font-medium mb-2">
-                <span className="mr-2"><Mail size={16}/></span> Email
+                <span className="mr-2"><Mail size={16} /></span> Email
               </label>
               <input
                 type="email"
@@ -163,53 +180,52 @@ const Login = () => {
 
             {/* TOGGLE: Show Password OR OTP based on state */}
             {!needsVerification ? (
-                /* PASSWORD INPUT */
-                <div>
-                  <label className="flex items-center text-white text-sm font-medium mb-2">
-                    <span className="mr-2"><Lock size={16}/></span> Password
-                  </label>
-                  <input
-                    type="password"
-                    value={formData.password}
-                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                    placeholder="••••••••"
-                    className="w-full px-4 py-3 bg-[#1a2332] border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/50"
-                    required
-                  />
-                </div>
+              /* PASSWORD INPUT */
+              <div>
+                <label className="flex items-center text-white text-sm font-medium mb-2">
+                  <span className="mr-2"><Lock size={16} /></span> Password
+                </label>
+                <input
+                  type="password"
+                  value={formData.password}
+                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                  placeholder="••••••••"
+                  className="w-full px-4 py-3 bg-[#1a2332] border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/50"
+                  required
+                />
+              </div>
             ) : (
-                /* OTP INPUT */
-                <div className="animate-pulse">
-                  <label className="flex items-center text-yellow-400 text-sm font-bold mb-2">
-                    <span className="mr-2"><Key size={16}/></span> Enter Verification Code
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.otp}
-                    onChange={(e) => setFormData({ ...formData, otp: e.target.value })}
-                    placeholder="123456"
-                    className="w-full px-4 py-3 bg-[#1a2332] border-2 border-yellow-500 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/50"
-                    required
-                  />
-                  <p className="text-xs text-gray-400 mt-2">Check your email inbox.</p>
-                </div>
+              /* OTP INPUT */
+              <div className="animate-pulse">
+                <label className="flex items-center text-yellow-400 text-sm font-bold mb-2">
+                  <span className="mr-2"><Key size={16} /></span> Enter Verification Code
+                </label>
+                <input
+                  type="text"
+                  value={formData.otp}
+                  onChange={(e) => setFormData({ ...formData, otp: e.target.value })}
+                  placeholder="123456"
+                  className="w-full px-4 py-3 bg-[#1a2332] border-2 border-yellow-500 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/50"
+                  required
+                />
+                <p className="text-xs text-gray-400 mt-2">Check your email inbox.</p>
+              </div>
             )}
 
             <button
               type="submit"
               disabled={loading}
-              className={`w-full py-3 rounded-lg font-semibold flex items-center justify-center gap-2 ${
-                loading
+              className={`w-full py-3 rounded-lg font-semibold flex items-center justify-center gap-2 ${loading
                   ? 'bg-gray-600 cursor-not-allowed'
-                  : needsVerification 
-                    ? 'bg-yellow-500 hover:bg-yellow-600 text-black' 
+                  : needsVerification
+                    ? 'bg-yellow-500 hover:bg-yellow-600 text-black'
                     : 'bg-blue-600 hover:bg-blue-700 text-white'
-              }`}
+                }`}
             >
               {loading ? (
-                <><Loader className="animate-spin w-5 h-5"/> Processing...</>
+                <><Loader className="animate-spin w-5 h-5" /> Processing...</>
               ) : (
-                needsVerification ? <><Key className="w-5 h-5"/> Verify & Login</> : <><ArrowRight className="w-5 h-5"/> Sign In</>
+                needsVerification ? <><Key className="w-5 h-5" /> Verify & Login</> : <><ArrowRight className="w-5 h-5" /> Sign In</>
               )}
             </button>
           </form>
@@ -288,14 +304,14 @@ const Login = () => {
               LIVE
             </span>
           </div>
-          
+
           {/* Candlestick Chart Placeholder */}
           <div className="bg-[#1a2332] p-6 rounded-lg h-64 flex items-end justify-around gap-2">
             {[60, 45, 70, 55, 80, 50, 65, 40, 75, 60, 85, 70, 55, 65, 50].map((height, i) => (
-              <div key={i} className="flex flex-col items-center justify-end" style={{height: '100%'}}>
-                <div 
+              <div key={i} className="flex flex-col items-center justify-end" style={{ height: '100%' }}>
+                <div
                   className={`w-3 rounded ${i % 3 === 0 ? 'bg-red-500' : i % 2 === 0 ? 'bg-green-500' : 'bg-gray-600'}`}
-                  style={{height: `${height}%`}}
+                  style={{ height: `${height}%` }}
                 ></div>
               </div>
             ))}

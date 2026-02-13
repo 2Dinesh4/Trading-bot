@@ -7,6 +7,8 @@ from app.schemas.user import UserCreate, UserLogin
 from app.utils.password import hash_password, verify_password
 from app.utils.jwt_handler import create_access_token
 from app.services.email_service import email_service
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
 import re
 import random
 import string
@@ -16,10 +18,14 @@ from pydantic import BaseModel, EmailStr
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
 STRICT_EMAIL_REGEX = r"^[a-zA-Z][\w\.-]{3,}@[a-zA-Z\d\.-]+\.[a-zA-Z]{2,}$"
+GOOGLE_CLIENT_ID = "123918068153-lp753gducn2ogetdjsbpdc27sp5cludt.apps.googleusercontent.com"
 
 class VerifyOTPRequest(BaseModel):
     email: EmailStr
     otp: str
+
+class GoogleLoginRequest(BaseModel):
+    token: str
 
 def generate_otp():
     return ''.join(random.choices(string.digits, k=6))
@@ -42,7 +48,7 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
         else:
             # Resend OTP to pending account
             existing_user.hashed_password = hash_password(user_data.password)
-            existing_user.full_name = user_data.name # Fixed field name
+            existing_user.name = user_data.name
             existing_user.otp_code = otp
             existing_user.otp_expires_at = otp_expiry
             db.commit()
@@ -56,9 +62,9 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
     # Create New User
     new_user = User(
         email=user_data.email,
-        full_name=user_data.name, # Fixed field name
+        name=user_data.name,
         hashed_password=hash_password(user_data.password),
-        phone_number=user_data.phone if user_data.phone else "", # Fixed field name
+        phone=user_data.phone if user_data.phone else "",
         kyc_status="pending",
         is_active=False,
         otp_code=otp,
@@ -119,7 +125,7 @@ async def verify_otp(data: VerifyOTPRequest, db: Session = Depends(get_db)):
         "user": {
             "id": user.id,
             "email": user.email,
-            "name": user.full_name,
+            "name": user.name,
             "wallet_balance": user.wallet.balance if user.wallet else 0.0
         }
     }
@@ -147,9 +153,69 @@ async def login(credentials: UserLogin, db: Session = Depends(get_db)):
         "user": {
             "id": user.id,
             "email": user.email,
-            "name": user.full_name,
+            "name": user.name,
             "kyc_status": user.kyc_status,
             "is_admin": user.is_admin,
             "wallet_balance": user.wallet.balance if user.wallet else 0.0
         }
     }
+
+@router.post("/google")
+async def google_login(data: GoogleLoginRequest, db: Session = Depends(get_db)):
+    """Google Sign-In Endpoint"""
+    try:
+        # Verify the Google token
+        id_info = id_token.verify_oauth2_token(
+            data.token,
+            google_requests.Request(),
+            audience=GOOGLE_CLIENT_ID
+        )
+        
+        email = id_info['email']
+        name = id_info.get('name', '')
+        
+        # Check if user exists
+        user = db.query(User).filter(User.email == email).first()
+        
+        if not user:
+            # Create user automatically (Active by default for Google)
+            user = User(
+                email=email,
+                name=name,
+                hashed_password=hash_password(email),  # Dummy password for Google users
+                kyc_status="pending",
+                is_active=True,  # Auto-activate Google users
+                provider="google"
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            
+            # Create Wallet for new Google user
+            new_wallet = Wallet(user_id=user.id, balance=0.00)
+            db.add(new_wallet)
+            db.commit()
+        
+        # Create access token
+        access_token = create_access_token(data={"user_id": user.id, "email": user.email})
+        
+        return {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "name": user.name,
+                "kyc_status": user.kyc_status,
+                "is_admin": user.is_admin,
+                "wallet_balance": user.wallet.balance if user.wallet else 0.0
+            }
+        }
+    except ValueError as e:
+        print(f"❌ Google Token Error: {e}")
+        raise HTTPException(status_code=400, detail="Invalid Google Token")
+    except Exception as e:
+        print(f"❌ Google Login Error: {type(e).__name__}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Google authentication failed: {str(e)}")

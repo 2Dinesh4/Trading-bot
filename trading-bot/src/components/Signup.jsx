@@ -32,43 +32,40 @@ const Signup = () => {
     }
   };
 
-  // Google OAuth success handler - FIXED PASSWORD LENGTH
+  // ✅ FIXED: Google OAuth Handler
   const handleGoogleSuccess = async (credentialResponse) => {
-    console.log('Google signup successful:', credentialResponse);
+    console.log('Google credential:', credentialResponse);
+    setError('');
     
     try {
-      const token = credentialResponse.credential;
-      
-      // Decode JWT token
-      const base64Url = token.split('.')[1];
-      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-      const jsonPayload = decodeURIComponent(atob(base64).split('').map(c => {
-        return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-      }).join(''));
-      
-      const userData = JSON.parse(jsonPayload);
-      console.log('Google user data:', userData);
-      
-      // ✅ FIXED: Short password for bcrypt (max 72 bytes)
-      const shortPassword = 'G@' + userData.sub.substring(0, 15);
-      
-      // Register user with Google data
-      await authService.register({
-        name: userData.name,
-        email: userData.email,
-        password: shortPassword,
-        phone: ''
+      // Send token to backend
+      const res = await fetch("http://localhost:10152/api/auth/google", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: credentialResponse.credential }),
       });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.detail || "Google Login Failed");
+      }
+
+      // Login Successful
+      console.log('Google Login Success:', data);
+      localStorage.setItem('token', data.access_token);
+      localStorage.setItem('user', JSON.stringify(data.user));
       
-      alert('Registration successful! Please login with Google.');
-      navigate('/login');
+      // Redirect to Dashboard
+      alert('Login Successful!');
+      navigate('/trading-bot'); // Make sure this route matches your dashboard route
+
     } catch (err) {
       console.error('Google signup error:', err);
-      setError(err.detail || 'Google signup failed. Please try email signup.');
+      setError(err.message || 'Google signup failed.');
     }
   };
 
-  // Google OAuth error handler
   const handleGoogleError = () => {
     console.error('Google signup failed');
     setError('Google signup failed. Please try again.');
@@ -91,13 +88,13 @@ const Signup = () => {
         )}
 
         {/* Google Signup Button */}
-        <div className="mb-4">
+        <div className="mb-4 flex justify-center">
           <GoogleLogin
             onSuccess={handleGoogleSuccess}
             onError={handleGoogleError}
             theme="outline"
             size="large"
-            width="100%"
+            width="350"
             text="signup_with"
           />
         </div>
